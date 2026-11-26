@@ -65,6 +65,67 @@ export function setStoredQrBaseOrigin(origin: string): void {
   }
 }
 
+export const QR_COUNTDOWN_WINDOW_OPTIONS = [3, 4, 5] as const;
+const QR_COUNTDOWN_MINUTES_KEY = 'todak_qr_countdown_minutes_v1';
+const QR_COUNTDOWN_START_PREFIX = 'todak_qr_countdown_start_v1_';
+
+export function getStoredQrCountdownMinutes(): 3 | 4 | 5 {
+  try {
+    const raw = Number(window.localStorage.getItem(QR_COUNTDOWN_MINUTES_KEY));
+    if (raw === 3 || raw === 4 || raw === 5) {
+      return raw;
+    }
+  } catch {
+    // Ignore localStorage error
+  }
+  return 5;
+}
+
+export function setStoredQrCountdownMinutes(minutes: number): 3 | 4 | 5 {
+  const valid: 3 | 4 | 5 =
+    minutes === 3 || minutes === 4 || minutes === 5 ? minutes : 5;
+  try {
+    window.localStorage.setItem(QR_COUNTDOWN_MINUTES_KEY, String(valid));
+  } catch {
+    // Ignore localStorage error
+  }
+  return valid;
+}
+
+export function getOrInitSessionCountdownStart(sessionId: string): number {
+  const key = `${QR_COUNTDOWN_START_PREFIX}${sessionId}`;
+  try {
+    const raw = Number(window.localStorage.getItem(key));
+    if (Number.isFinite(raw) && raw > 0) {
+      return raw;
+    }
+    const now = Date.now();
+    window.localStorage.setItem(key, String(now));
+    return now;
+  } catch {
+    return Date.now();
+  }
+}
+
+export function resetSessionCountdownStart(sessionId: string): number {
+  const key = `${QR_COUNTDOWN_START_PREFIX}${sessionId}`;
+  const now = Date.now();
+  try {
+    window.localStorage.setItem(key, String(now));
+  } catch {
+    // Ignore localStorage error
+  }
+  return now;
+}
+
+export function formatCountdownDuration(totalSeconds: number): string {
+  const clamped = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(clamped / 60);
+  const secs = clamped % 60;
+  if (mins === 0) return `${secs}s`;
+  return `${mins}m ${String(secs).padStart(2, '0')}s`;
+}
+
 export function buildQrCheckInUrl(
   sessionId: string,
   token: string,

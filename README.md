@@ -8,7 +8,7 @@ A serverless, real-time classroom QR attendance web application built for **Toda
 
 - **Simultaneous QR Clock-In (`Student Check-In`)**: Every student in the classroom scans the active QR code using their phone camera (`html5-qrcode`) or by pasting/opening the check-in link—no queues or shared tablets required.
 - **Rolling QR Protection & One-Account-Per-Phone Lock**:
-  - Timed QR rotation (`15s`, `30s`, `60s`, or manual) with a 1-step previous-token grace window prevents screenshot sharing.
+  - Timed QR countdown (`15s`, `30s`, `60s`) runs only during the initial **3–5 minute window** (configurable in Console, default 5 minutes), then automatically switches to **per-clock-in rotation** (with a 1-step previous-token grace window) to minimize token creation and Firestore writes.
   - Per-session `deviceLocks` enforce one Google account per device per class session, while atomic Firestore batch writes ensure `attendance` and `deviceLocks` succeed together.
 - **Classroom Attendee Projector Mode (`Classroom Attendee`)**: Fullscreen projector view with live countdown, QR sequence number, real-time check-in count, and sortable/searchable attendance roster.
 - **Instructor Console (`Instructor Console`)**:

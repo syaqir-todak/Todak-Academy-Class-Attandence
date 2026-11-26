@@ -53,9 +53,12 @@ import {
 } from '../utils/attendance';
 import {
   formatSessionDateLabel,
+  getStoredQrCountdownMinutes,
   getTodayDateInputValue,
   isDevPreviewOrigin,
   isValidDateInputValue,
+  QR_COUNTDOWN_WINDOW_OPTIONS,
+  setStoredQrCountdownMinutes,
 } from '../utils/qr';
 import { CuEligibilityFlag, CuProgressMeter } from './CuEligibilityStatus';
 
@@ -91,6 +94,9 @@ export function InstructorConsoleView({
   onLaunchKiosk,
 }: InstructorConsoleViewProps) {
   const [consoleTab, setConsoleTab] = useState<ConsoleSubTab>('sessions');
+  const [countdownWindowMinutes, setCountdownWindowMinutes] = useState<
+    3 | 4 | 5
+  >(() => getStoredQrCountdownMinutes());
 
   const activeSessions = useMemo(
     () => sessions.filter((s) => !s.isEnded),
@@ -2259,9 +2265,14 @@ export function InstructorConsoleView({
                   {!activeSession.isEnded && (
                     <div className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-xs font-semibold text-[#0F172A]">
-                          Classroom QR Settings
-                        </p>
+                        <div>
+                          <p className="text-xs font-semibold text-[#0F172A]">
+                            Classroom QR Settings
+                          </p>
+                          <p className="text-[11px] text-[#64748B] mt-0.5">
+                            Timed countdown runs for the first {countdownWindowMinutes} min, then switches to rotating per clock-in.
+                          </p>
+                        </div>
                         <div className="flex flex-wrap items-center gap-2.5">
                           <div className="flex items-center gap-2">
                             <label
@@ -2284,6 +2295,33 @@ export function InstructorConsoleView({
                               {QR_ROTATE_INTERVALS.map((sec) => (
                                 <option key={sec} value={sec}>
                                   {sec === 0 ? 'Manual Only' : `Every ${sec}s`}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <label
+                              htmlFor="console-countdown-window"
+                              className="text-xs text-[#64748B] whitespace-nowrap"
+                            >
+                              Timer Window
+                            </label>
+                            <select
+                              id="console-countdown-window"
+                              value={countdownWindowMinutes}
+                              onChange={(e) =>
+                                setCountdownWindowMinutes(
+                                  setStoredQrCountdownMinutes(
+                                    Number(e.target.value)
+                                  )
+                                )
+                              }
+                              className="min-h-[38px] px-2.5 py-1.5 text-xs font-semibold text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F] cursor-pointer"
+                            >
+                              {QR_COUNTDOWN_WINDOW_OPTIONS.map((mins) => (
+                                <option key={mins} value={mins}>
+                                  First {mins} min
                                 </option>
                               ))}
                             </select>

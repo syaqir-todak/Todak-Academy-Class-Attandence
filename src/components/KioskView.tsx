@@ -11,6 +11,7 @@ import {
   Minimize2,
   Pause,
   Play,
+  RotateCcw,
   Search,
   Square,
 } from 'lucide-react';
@@ -27,7 +28,11 @@ import {
 } from '../services/attendanceService';
 import {
   buildQrCheckInUrl,
+  formatCountdownDuration,
   formatSessionDateLabel,
+  getOrInitSessionCountdownStart,
+  getStoredQrCountdownMinutes,
+  resetSessionCountdownStart,
 } from '../utils/qr';
 
 interface KioskViewProps {
@@ -62,10 +67,21 @@ export function KioskView({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number>(autoRotateSeconds);
+  const [countdownMinutes] = useState<3 | 4 | 5>(() =>
+    getStoredQrCountdownMinutes()
+  );
+  const [countdownStartMs, setCountdownStartMs] = useState<number>(() =>
+    activeSession ? getOrInitSessionCountdownStart(activeSession.id) : Date.now()
+  );
+  const [windowSecondsLeft, setWindowSecondsLeft] = useState<number>(0);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [searchQuery, setSearchQuery] = useState('');
   const kioskRef = useRef<HTMLDivElement | null>(null);
   const autoRotatingRef = useRef(false);
+  const seenAttendanceIdsRef = useRef<Set<string>>(new Set());
+  const seededSessionIdRef = useRef<string | null>(null);
+  const lastRotatedForTokenRef = useRef<string | null>(null);
+  const clockInRotatingRef = useRef(false);
 
   useEffect(() => {
     if (!activeSession) {
@@ -100,9 +116,21 @@ export function KioskView({
   }, []);
 
   useEffect(() => {
+    if (!activeSession) return;
+    const started = getOrInitSessionCountdownStart(activeSession.id);
+    setCountdownStartMs(started);
+    const remaining = Math.max(
+      0,
+      Math.ceil((started + countdownMinutes * 60_000 - Date.now()) / 1000)
+    );
+    setWindowSecondsLeft(remaining);
+  }, [activeSession?.id, countdownMinutes]);
+
+  useEffect(() => {
     setSecondsLeft(autoRotateSeconds);
   }, [activeSession?.id, qrState?.activeToken, autoRotateSeconds]);
 
+  // Phase 1: Timed countdown ONLY during the first 3-5 minutes
   useEffect(() => {
     if (
       autoRotateSeconds <= 0 ||
@@ -114,7 +142,28 @@ export function KioskView({
       return;
     }
 
+    const computeRemaining = () =>
+      Math.max(
+        0,
+        Math.ceil(
+          (countdownStartMs + countdownMinutes * 60_000 - Date.now()) / 1000
+        )
+      );
+
+    const initialRemaining = computeRemaining();
+    setWindowSecondsLeft(initialRemaining);
+    if (initialRemaining <= 0) {
+      return;
+    }
+
     const timer = window.setInterval(() => {
+      const remaining = computeRemaining();
+      setWindowSecondsLeft(remaining);
+      if (remaining <= 0) {
+        window.clearInterval(timer);
+        return;
+      }
+
       setSecondsLeft((prev) => {
         if (prev <= 1) {
           if (!autoRotatingRef.current) {
@@ -141,6 +190,72 @@ export function KioskView({
     activeSession?.isEnded,
     activeSession?.tokenSequence,
     qrState?.activeToken,
+    countdownStartMs,
+    countdownMinutes,
+  ]);
+
+  // Phase 2: After the 3-5 minute countdown ends, rotate QR once per new student clock-in
+  useEffect(() => {
+    if (!activeSession) {
+      seededSessionIdRef.current = null;
+      seenAttendanceIdsRef.current = new Set();
+      lastRotatedForTokenRef.current = null;
+      return;
+    }
+
+    if (seededSessionIdRef.current !== activeSession.id) {
+      seededSessionIdRef.current = activeSession.id;
+      seenAttendanceIdsRef.current = new Set(
+        sessionAttendance.map((rec) => rec.id)
+      );
+      lastRotatedForTokenRef.current = null;
+      return;
+    }
+
+    const newRecords = sessionAttendance.filter(
+      (rec) => !seenAttendanceIdsRef.current.has(rec.id)
+    );
+    for (const rec of sessionAttendance) {
+      seenAttendanceIdsRef.current.add(rec.id);
+    }
+
+    if (
+      newRecords.length === 0 ||
+      autoRotateSeconds <= 0 ||
+      windowSecondsLeft > 0 ||
+      !activeSession.isOpen ||
+      activeSession.isEnded ||
+      !qrState ||
+      clockInRotatingRef.current
+    ) {
+      return;
+    }
+
+    const matchedActiveToken = newRecords.some(
+      (rec) => rec.tokenUsed === qrState.activeToken
+    );
+    if (!matchedActiveToken || lastRotatedForTokenRef.current === qrState.activeToken) {
+      return;
+    }
+
+    const tokenBeingRotated = qrState.activeToken;
+    lastRotatedForTokenRef.current = tokenBeingRotated;
+    clockInRotatingRef.current = true;
+    void rotateSessionQrManually(activeSession, tokenBeingRotated)
+      .catch(() => {
+        if (lastRotatedForTokenRef.current === tokenBeingRotated) {
+          lastRotatedForTokenRef.current = null;
+        }
+      })
+      .finally(() => {
+        clockInRotatingRef.current = false;
+      });
+  }, [
+    activeSession,
+    sessionAttendance,
+    autoRotateSeconds,
+    windowSecondsLeft,
+    qrState,
   ]);
 
   const entryOrderMap = useMemo(() => {
@@ -253,6 +368,14 @@ export function KioskView({
     }
   };
 
+  const handleRestartCountdown = () => {
+    if (!activeSession) return;
+    const restartedAt = resetSessionCountdownStart(activeSession.id);
+    setCountdownStartMs(restartedAt);
+    setWindowSecondsLeft(countdownMinutes * 60);
+    setSecondsLeft(autoRotateSeconds);
+  };
+
   const handleFullscreen = async () => {
     if (!kioskRef.current) return;
     try {
@@ -324,6 +447,17 @@ export function KioskView({
                     </>
                   )}
                 </button>
+
+                {autoRotateSeconds > 0 && windowSecondsLeft === 0 && (
+                  <button
+                    type="button"
+                    onClick={handleRestartCountdown}
+                    className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[40px] text-xs font-semibold border border-[#E2E8F0] rounded-lg bg-white text-[#0F172A] hover:bg-[#F8FAFC] transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-[#3F6212]" />
+                    Restart {countdownMinutes}m Timer
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -415,10 +549,24 @@ export function KioskView({
                 <p className="text-lg font-semibold text-[#B45309]">
                   Check-ins paused
                 </p>
+              ) : autoRotateSeconds > 0 && windowSecondsLeft > 0 ? (
+                <>
+                  <p className="text-lg font-semibold font-mono tabular-nums text-[#3F6212]">
+                    Refreshes in {secondsLeft}s
+                  </p>
+                  <p className="text-[11px] font-mono tabular-nums text-[#64748B]">
+                    Timed window: {formatCountdownDuration(windowSecondsLeft)} left · then per clock-in
+                  </p>
+                </>
               ) : autoRotateSeconds > 0 ? (
-                <p className="text-lg font-semibold font-mono tabular-nums text-[#3F6212]">
-                  Refreshes in {secondsLeft}s
-                </p>
+                <>
+                  <p className="text-lg font-semibold text-[#3F6212]">
+                    Rotates per clock-in
+                  </p>
+                  <p className="text-[11px] text-[#64748B]">
+                    First {countdownMinutes}m timer complete · QR changes on each check-in
+                  </p>
+                </>
               ) : (
                 <p className="text-sm font-medium text-[#475569]">
                   Manual QR rotation
