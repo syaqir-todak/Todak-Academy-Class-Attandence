@@ -493,12 +493,19 @@ export function sanitizeCsvFilename(raw: string): string {
     .slice(0, 120);
 }
 
-function escapeCsvCellValue(value: string | number): string {
-  const str = String(value);
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-    return `"${str.replace(/"/g, '""')}"`;
+export function escapeCsvCellValue(value: string | number): string {
+  const raw = String(value);
+  const safe =
+    typeof value === 'string' && /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  if (
+    safe.includes(',') ||
+    safe.includes('"') ||
+    safe.includes('\n') ||
+    safe.includes('\r')
+  ) {
+    return `"${safe.replace(/"/g, '""')}"`;
   }
-  return str;
+  return safe;
 }
 
 export function buildSessionCsvFilename(session: SessionDoc): string {

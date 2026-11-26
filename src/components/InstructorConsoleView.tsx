@@ -42,6 +42,7 @@ import {
   buildSessionCsvFilename,
   calculateStudentCuProgress,
   compileFullCuAttendanceCsv,
+  escapeCsvCellValue,
   findUnitInConfig,
   getCourseById,
   getDefaultUnitList,
@@ -73,14 +74,6 @@ interface InstructorConsoleViewProps {
 type ConsoleSubTab = 'sessions' | 'progress' | 'setup';
 type EligibilityFilter = 'all' | 'eligible' | 'below';
 type SessionMode = 'program' | 'standalone';
-
-function escapeCsvCell(value: string | number): string {
-  const str = String(value);
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
 
 function cloneUnitList(list: CuUnitConfig[]): CuUnitConfig[] {
   return list.map((item) => ({ ...item }));
@@ -855,7 +848,7 @@ export function InstructorConsoleView({
     });
 
     const csv = [headers, ...rows]
-      .map((row) => row.map(escapeCsvCell).join(','))
+      .map((row) => row.map(escapeCsvCellValue).join(','))
       .join('\n');
 
     triggerCsvDownload(buildSessionCsvFilename(activeSession), csv);
@@ -922,7 +915,7 @@ export function InstructorConsoleView({
     ]);
 
     const csv = [headers, ...rows]
-      .map((row) => row.map(escapeCsvCell).join(','))
+      .map((row) => row.map(escapeCsvCellValue).join(','))
       .join('\n');
 
     triggerCsvDownload('todak-academy-cu-80-eligibility.csv', csv);
@@ -3012,8 +3005,8 @@ export function InstructorConsoleView({
                 </thead>
                 <tbody className="divide-y divide-[#E2E8F0] text-xs">
                   {draftUnits.map((row, index) => {
-                    const minDays = Math.ceil(
-                      (Math.max(1, row.targetDays) || 1) * 0.8
+                    const minDays = getMinRequiredDaysFor80(
+                      row.targetDays || 1
                     );
                     return (
                       <tr
