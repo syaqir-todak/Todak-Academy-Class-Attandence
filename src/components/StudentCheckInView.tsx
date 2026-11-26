@@ -90,6 +90,7 @@ export function StudentCheckInView({
       studentName: user.displayName || user.email || 'Student',
       studentEmail: user.email || '',
       courseId: session.courseId,
+      courseName: session.courseName,
       cuCode: session.cuCode,
       batch: session.batch,
       fallbackTitle: session.title,
@@ -468,6 +469,9 @@ export function StudentCheckInView({
                       </span>
                       <CuEligibilityFlag
                         isEligible={scannedSessionCuStatus.isExamEligible}
+                        requiredPercentage={
+                          scannedSessionCuStatus.requiredPercentage
+                        }
                         daysNeededFor80={scannedSessionCuStatus.daysNeededFor80}
                       />
                     </div>
@@ -475,10 +479,14 @@ export function StudentCheckInView({
                       percentage={scannedSessionCuStatus.percentage}
                       percentageLabel={scannedSessionCuStatus.percentageLabel}
                       isEligible={scannedSessionCuStatus.isExamEligible}
+                      requiredPercentage={
+                        scannedSessionCuStatus.requiredPercentage
+                      }
                     />
                     <p className="text-[11px] font-mono tabular-nums text-[#475569]">
                       {scannedSessionCuStatus.attendedDays} /{' '}
-                      {scannedSessionCuStatus.targetDays} target days · 80% exam gate:{' '}
+                      {scannedSessionCuStatus.targetDays} target days ·{' '}
+                      {scannedSessionCuStatus.requiredPercentage}% exam gate:{' '}
                       {scannedSessionCuStatus.minRequiredDays} days
                     </p>
                   </div>
@@ -577,10 +585,10 @@ export function StudentCheckInView({
             <div className="p-5 border-b border-[#E2E8F0] flex items-baseline justify-between gap-4">
               <div>
                 <h2 className="text-sm font-semibold text-[#0F172A]">
-                  CU Attendance & 80% Exam Status
+                  CU Attendance & Exam Status
                 </h2>
                 <p className="text-xs text-[#64748B] mt-0.5">
-                  Minimum 80% attendance required before sitting for each CU exam
+                  Minimum required attendance per CU before sitting for each exam
                 </p>
               </div>
             </div>
@@ -588,7 +596,7 @@ export function StudentCheckInView({
             {cuProgressList.length === 0 ? (
               <div className="p-6 text-center">
                 <p className="text-xs text-[#64748B] leading-relaxed">
-                  Your Competency Unit percentage and 80% exam eligibility will appear here once you attend a course CU class.
+                  Your Competency Unit percentage and exam eligibility will appear here once you attend a course CU class.
                 </p>
               </div>
             ) : (
@@ -629,15 +637,17 @@ export function StudentCheckInView({
                       percentage={item.percentage}
                       percentageLabel={item.percentageLabel}
                       isEligible={item.isExamEligible}
+                      requiredPercentage={item.requiredPercentage}
                       showPercentageLabel={false}
                     />
 
                     <div className="flex items-center justify-between gap-2 text-xs flex-wrap">
                       <span className="font-mono tabular-nums text-[#475569]">
-                        {item.attendedDays} / {item.targetDays} days (min {item.minRequiredDays})
+                        {item.attendedDays} / {item.targetDays} days (min {item.minRequiredDays} · {item.requiredPercentage}%)
                       </span>
                       <CuEligibilityFlag
                         isEligible={item.isExamEligible}
+                        requiredPercentage={item.requiredPercentage}
                         daysNeededFor80={item.daysNeededFor80}
                       />
                     </div>

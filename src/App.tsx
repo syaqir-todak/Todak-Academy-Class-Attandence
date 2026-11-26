@@ -154,31 +154,31 @@ function TodakAttendanceApp() {
       }
     );
 
-    const unsubConfigs = COURSES.map((course) => {
-      const path = `courseCuConfigs/${course.id}`;
-      return onSnapshot(
-        doc(db, 'courseCuConfigs', course.id),
-        (snap) => {
-          const data = snap.exists()
-            ? (snap.data() as CourseCuConfigDoc)
-            : null;
-          setCourseConfigs((prev) => ({
-            ...prev,
-            [course.id]: buildMergedCourseConfig(course.id, data),
-          }));
-        },
-        (error) => {
-          handleFirestoreError(error, OperationType.GET, path);
+    const configsQuery = query(collection(db, 'courseCuConfigs'));
+    const unsubConfigs = onSnapshot(
+      configsQuery,
+      (snapshot) => {
+        const next: Record<string, CourseCuConfigDoc> = {};
+        for (const c of COURSES) {
+          next[c.id] = buildMergedCourseConfig(c.id);
         }
-      );
-    });
+        for (const docSnap of snapshot.docs) {
+          const data = docSnap.data() as CourseCuConfigDoc;
+          next[docSnap.id] = buildMergedCourseConfig(docSnap.id, data);
+        }
+        setCourseConfigs(next);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'courseCuConfigs');
+      }
+    );
 
     if (!isInstructor) {
       setSessions([]);
       setInstructorAttendance([]);
       return () => {
         unsubMyAttendance();
-        for (const unsub of unsubConfigs) unsub();
+        unsubConfigs();
       };
     }
 
@@ -224,7 +224,7 @@ function TodakAttendanceApp() {
 
     return () => {
       unsubMyAttendance();
-      for (const unsub of unsubConfigs) unsub();
+      unsubConfigs();
       unsubSessions();
       unsubInstructorAttendance();
     };

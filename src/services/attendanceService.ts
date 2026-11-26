@@ -1,5 +1,6 @@
 import type { User } from 'firebase/auth';
 import {
+  deleteDoc,
   deleteField,
   doc,
   getDoc,
@@ -10,8 +11,8 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
-  COURSES,
   type AttendanceRecordDoc,
+  type CourseCuConfigDoc,
   type CourseId,
   type CuUnitConfig,
   type DeviceLockDoc,
@@ -20,6 +21,7 @@ import {
 import {
   formatCuPrefixedTitle,
   getCourseById,
+  isValidCourseIdSlug,
   isValidCuCode,
   sanitizeUnitItem,
 } from '../utils/attendance';
@@ -67,28 +69,94 @@ function normalizeAutoRotateSeconds(value?: number): number {
 export async function saveCourseCuConfig(
   user: User,
   courseId: CourseId,
-  unitListInput: CuUnitConfig[]
+  unitListInput: CuUnitConfig[],
+  options?: {
+    courseName?: string;
+    courseShortName?: string;
+    isDeleted?: boolean;
+  }
 ): Promise<void> {
-  const course = getCourseById(courseId) || COURSES[0];
+  if (!isValidCourseIdSlug(courseId)) {
+    throw new Error('Program ID must be 2-64 characters using letters, numbers, hyphens, or underscores.');
+  }
+
+  const builtIn = getCourseById(courseId);
+  const courseName = (options?.courseName || builtIn?.name || courseId)
+    .trim()
+    .slice(0, 120);
+  if (courseName.length < 2) {
+    throw new Error('Program name must be at least 2 characters.');
+  }
+
+  const courseShortName = (
+    options?.courseShortName ||
+    builtIn?.shortName ||
+    courseName
+  )
+    .trim()
+    .slice(0, 60);
+
   const sanitizedList = unitListInput
     .slice(0, 50)
     .map((item, idx) => sanitizeUnitItem(item, idx + 1));
 
   if (sanitizedList.length === 0) {
-    throw new Error('At least one Competency Unit / module row is required.');
+    throw new Error('At least one subject / Competency Unit row is required.');
   }
 
-  const ref = doc(db, 'courseCuConfigs', course.id);
+  const payload: Record<string, unknown> = {
+    courseId,
+    courseName,
+    unitList: sanitizedList,
+    updatedByUid: user.uid,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (courseShortName.length >= 1) {
+    payload.courseShortName = courseShortName;
+  }
+  if (typeof options?.isDeleted === 'boolean') {
+    payload.isDeleted = options.isDeleted;
+  } else {
+    payload.isDeleted = false;
+  }
+
+  const ref = doc(db, 'courseCuConfigs', courseId);
   try {
-    await setDoc(ref, {
-      courseId: course.id,
-      courseName: course.name,
-      unitList: sanitizedList,
-      updatedByUid: user.uid,
-      updatedAt: serverTimestamp(),
-    });
+    await setDoc(ref, payload);
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `courseCuConfigs/${course.id}`);
+    handleFirestoreError(error, OperationType.WRITE, `courseCuConfigs/${courseId}`);
+  }
+}
+
+export async function deleteCourseProgram(
+  user: User,
+  courseId: CourseId,
+  existingConfig?: CourseCuConfigDoc | null
+): Promise<void> {
+  if (!isValidCourseIdSlug(courseId)) {
+    throw new Error('Invalid Program ID.');
+  }
+
+  const builtIn = getCourseById(courseId);
+  if (builtIn) {
+    const fallbackUnits =
+      existingConfig?.unitList && existingConfig.unitList.length > 0
+        ? existingConfig.unitList
+        : [{ cuCode: 'CU01', unitName: 'Archived Module', weeks: 1, targetDays: 5, requiredPercentage: 80 }];
+    await saveCourseCuConfig(user, courseId, fallbackUnits, {
+      courseName: existingConfig?.courseName || builtIn.name,
+      courseShortName: existingConfig?.courseShortName || builtIn.shortName,
+      isDeleted: true,
+    });
+    return;
+  }
+
+  const ref = doc(db, 'courseCuConfigs', courseId);
+  try {
+    await deleteDoc(ref);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `courseCuConfigs/${courseId}`);
   }
 }
 
@@ -98,7 +166,10 @@ export async function createSessionWithQr(
 ): Promise<string> {
   const trainerName = sanitizeString(input.trainerName, 100, 'Trainer');
   const classLab = sanitizeString(input.classLab, 64, 'Jaka');
-  const course = getCourseById(input.courseId);
+  const validCourseId = isValidCourseIdSlug(input.courseId)
+    ? input.courseId
+    : undefined;
+  const builtInCourse = getCourseById(validCourseId);
   const cuCode = isValidCuCode(input.cuCode) ? input.cuCode : undefined;
   const formattedTitle = cuCode
     ? formatCuPrefixedTitle(cuCode, input.title)
@@ -135,9 +206,18 @@ export async function createSessionWithQr(
     updatedAt: serverTimestamp(),
   };
 
-  if (course) {
-    sessionPayload.courseId = course.id;
-    sessionPayload.courseName = course.name;
+  if (validCourseId) {
+    sessionPayload.courseId = validCourseId;
+    const resolvedName = (
+      input.courseName ||
+      builtInCourse?.name ||
+      validCourseId
+    )
+      .trim()
+      .slice(0, 120);
+    if (resolvedName.length >= 2) {
+      sessionPayload.courseName = resolvedName;
+    }
     if (cuCode) {
       sessionPayload.cuCode = cuCode;
     }
@@ -180,7 +260,10 @@ export async function updateSessionDetails(
 ): Promise<void> {
   const trainerName = sanitizeString(input.trainerName, 100, 'Trainer');
   const classLab = sanitizeString(input.classLab, 64, 'Jaka');
-  const course = getCourseById(input.courseId);
+  const validCourseId = isValidCourseIdSlug(input.courseId)
+    ? input.courseId
+    : undefined;
+  const builtInCourse = getCourseById(validCourseId);
   const cuCode = isValidCuCode(input.cuCode) ? input.cuCode : undefined;
   const formattedTitle = cuCode
     ? formatCuPrefixedTitle(cuCode, input.title)
@@ -207,9 +290,18 @@ export async function updateSessionDetails(
     updatedAt: serverTimestamp(),
   };
 
-  if (course) {
-    updatePayload.courseId = course.id;
-    updatePayload.courseName = course.name;
+  if (validCourseId) {
+    updatePayload.courseId = validCourseId;
+    const resolvedName = (
+      input.courseName ||
+      builtInCourse?.name ||
+      validCourseId
+    )
+      .trim()
+      .slice(0, 120);
+    if (resolvedName.length >= 2) {
+      updatePayload.courseName = resolvedName;
+    }
     if (cuCode) {
       updatePayload.cuCode = cuCode;
     } else {

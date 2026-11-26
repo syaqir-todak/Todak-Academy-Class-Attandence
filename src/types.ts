@@ -16,7 +16,7 @@ export const CAMPUS_ROOMS = [
   'Auditorium',
 ] as const;
 
-export const COURSES = [
+export const DEFAULT_COURSES = [
   {
     id: 'dkm-3d-animation',
     name: 'DKM 3D Animation Production Operation',
@@ -39,7 +39,9 @@ export const COURSES = [
   },
 ] as const;
 
-export type CourseId = (typeof COURSES)[number]['id'];
+export const COURSES = DEFAULT_COURSES;
+
+export type CourseId = string;
 
 export const CU_CODES = [
   'CU01',
@@ -74,11 +76,14 @@ export interface CuUnitConfig {
   totalHours?: number;
   weeks: number;
   targetDays: number;
+  requiredPercentage?: number;
 }
 
 export interface CourseCuConfigDoc {
   courseId: CourseId;
   courseName: string;
+  courseShortName?: string;
+  isDeleted?: boolean;
   unitList: CuUnitConfig[];
   units?: Record<string, CuUnitConfig>;
   excludedHolidays?: string[];

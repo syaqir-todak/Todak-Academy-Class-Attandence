@@ -17,7 +17,6 @@ import {
 } from 'lucide-react';
 import {
   CAMPUS_ROOMS,
-  COURSES,
   QR_ROTATE_INTERVALS,
   STANDALONE_CLASS_TYPES,
   type AttendanceRecordDoc,
@@ -28,6 +27,7 @@ import {
 } from '../types';
 import {
   createSessionWithQr,
+  deleteCourseProgram,
   deleteSessionAndState,
   endClassSession,
   removeAttendanceAndUnlockDevice,
@@ -44,12 +44,17 @@ import {
   compileFullCuAttendanceCsv,
   escapeCsvCellValue,
   findUnitInConfig,
+  getActiveCourseList,
   getCourseById,
+  getCourseDisplayMeta,
   getDefaultUnitList,
-  getMinRequiredDaysFor80,
+  getMinRequiredDaysForThreshold,
   isTaklimatUnit,
+  isValidCourseIdSlug,
   isValidCuCode,
   normalizeCuCode,
+  normalizeRequiredPercentage,
+  slugifyCourseId,
 } from '../utils/attendance';
 import {
   formatSessionDateLabel,
@@ -139,20 +144,24 @@ export function InstructorConsoleView({
     );
   }, [sessions]);
 
+  const activeCourses = useMemo(
+    () => getActiveCourseList(courseConfigs),
+    [courseConfigs]
+  );
+
   const sidebarCuFilterChoices = useMemo(() => {
     if (sidebarCourseFilter === '__standalone__') {
       return [];
     }
     if (sidebarCourseFilter !== 'all') {
-      const validCourse = getCourseById(sidebarCourseFilter);
-      if (!validCourse) return [];
+      if (!isValidCourseIdSlug(sidebarCourseFilter)) return [];
       return buildMergedCourseConfig(
-        validCourse.id,
-        courseConfigs[validCourse.id]
+        sidebarCourseFilter,
+        courseConfigs[sidebarCourseFilter]
       ).unitList.map((u) => u.cuCode);
     }
     const set = new Set<string>();
-    for (const c of COURSES) {
+    for (const c of activeCourses) {
       const cfg = buildMergedCourseConfig(c.id, courseConfigs[c.id]);
       for (const u of cfg.unitList) set.add(u.cuCode);
     }
@@ -160,7 +169,7 @@ export function InstructorConsoleView({
       if (s.cuCode) set.add(s.cuCode);
     }
     return Array.from(set);
-  }, [sidebarCourseFilter, courseConfigs, sessions]);
+  }, [sidebarCourseFilter, activeCourses, courseConfigs, sessions]);
 
   const availableHistoryWeeks = useMemo(() => {
     const set = new Set<string>();
@@ -184,7 +193,7 @@ export function InstructorConsoleView({
   const visibleSessions = useMemo(() => {
     return baseList.filter((s) => {
       if (sidebarCourseFilter === '__standalone__') {
-        if (s.courseId && getCourseById(s.courseId)) return false;
+        if (s.courseId && isValidCourseIdSlug(s.courseId)) return false;
       } else if (
         sidebarCourseFilter !== 'all' &&
         s.courseId !== sidebarCourseFilter
@@ -299,7 +308,9 @@ export function InstructorConsoleView({
   );
   const [editCustomStandaloneLabel, setEditCustomStandaloneLabel] =
     useState('');
-  const [editCourseId, setEditCourseId] = useState<CourseId>(COURSES[0].id);
+  const [editCourseId, setEditCourseId] = useState<CourseId>(
+    () => activeCourses[0]?.id || 'dkm-3d-animation'
+  );
   const [editCuCode, setEditCuCode] = useState<string>('CU01');
   const [editBatch, setEditBatch] = useState('');
   const [editTrainerName, setEditTrainerName] = useState('');
@@ -324,6 +335,7 @@ export function InstructorConsoleView({
           unitName: editCuCode,
           weeks: 1,
           targetDays: 5,
+          requiredPercentage: 80,
         },
         ...list,
       ];
@@ -346,7 +358,7 @@ export function InstructorConsoleView({
   const [rotatingQr, setRotatingQr] = useState(false);
   const [savingRotateInterval, setSavingRotateInterval] = useState(false);
 
-  // CU Progress & 80% Exam Eligibility state
+  // CU Progress & Exam Eligibility state
   const [progressCourseFilter, setProgressCourseFilter] =
     useState<string>('all');
   const [progressBatchFilter, setProgressBatchFilter] = useState<string>('all');
@@ -358,15 +370,29 @@ export function InstructorConsoleView({
   const [progressFullCuDownloaded, setProgressFullCuDownloaded] =
     useState(false);
 
-  // Editable CU Setup state
+  // Editable Tetapan Subjek & Program state
   const [setupCourseId, setSetupCourseId] = useState<CourseId>(
-    'dkm-creative-multimedia'
+    () => activeCourses[0]?.id || 'dkm-creative-multimedia'
+  );
+  const [draftCourseName, setDraftCourseName] = useState<string>(
+    () =>
+      buildMergedCourseConfig(
+        activeCourses[0]?.id || 'dkm-creative-multimedia',
+        courseConfigs[activeCourses[0]?.id || 'dkm-creative-multimedia']
+      ).courseName
+  );
+  const [draftCourseShortName, setDraftCourseShortName] = useState<string>(
+    () =>
+      buildMergedCourseConfig(
+        activeCourses[0]?.id || 'dkm-creative-multimedia',
+        courseConfigs[activeCourses[0]?.id || 'dkm-creative-multimedia']
+      ).courseShortName || ''
   );
   const [draftUnits, setDraftUnits] = useState<CuUnitConfig[]>(() =>
     cloneUnitList(
       buildMergedCourseConfig(
-        'dkm-creative-multimedia',
-        courseConfigs['dkm-creative-multimedia']
+        activeCourses[0]?.id || 'dkm-creative-multimedia',
+        courseConfigs[activeCourses[0]?.id || 'dkm-creative-multimedia']
       ).unitList
     )
   );
@@ -377,12 +403,55 @@ export function InstructorConsoleView({
   );
   const [setupError, setSetupError] = useState<string | null>(null);
 
+  // Add / Delete Program state inside Tetapan Subjek
+  const [showAddProgramForm, setShowAddProgramForm] = useState(false);
+  const [newProgramName, setNewProgramName] = useState('');
+  const [newProgramShortName, setNewProgramShortName] = useState('');
+  const [newProgramSlugInput, setNewProgramSlugInput] = useState('');
+  const [addingProgram, setAddingProgram] = useState(false);
+  const [addProgramError, setAddProgramError] = useState<string | null>(null);
+  const [confirmDeleteProgramId, setConfirmDeleteProgramId] = useState<
+    string | null
+  >(null);
+  const [deletingProgram, setDeletingProgram] = useState(false);
+
   useEffect(() => {
-    if (!setupDirty) {
+    if (
+      activeCourses.length > 0 &&
+      !activeCourses.some((c) => c.id === courseId)
+    ) {
+      setCourseId(activeCourses[0].id);
+    }
+  }, [activeCourses, courseId]);
+
+  useEffect(() => {
+    if (
+      activeCourses.length > 0 &&
+      !activeCourses.some((c) => c.id === editCourseId)
+    ) {
+      setEditCourseId(activeCourses[0].id);
+    }
+  }, [activeCourses, editCourseId]);
+
+  useEffect(() => {
+    if (
+      activeCourses.length > 0 &&
+      !activeCourses.some((c) => c.id === setupCourseId)
+    ) {
+      setSetupCourseId(activeCourses[0].id);
+      setSetupDirty(false);
+      setConfirmDeleteProgramId(null);
+    }
+  }, [activeCourses, setupCourseId]);
+
+  useEffect(() => {
+    if (!setupDirty && setupCourseId) {
       const merged = buildMergedCourseConfig(
         setupCourseId,
         courseConfigs[setupCourseId]
       );
+      setDraftCourseName(merged.courseName);
+      setDraftCourseShortName(merged.courseShortName || merged.courseName);
       setDraftUnits(cloneUnitList(merged.unitList));
     }
   }, [setupCourseId, courseConfigs, setupDirty]);
@@ -443,7 +512,7 @@ export function InstructorConsoleView({
       }));
     }
     const map = new Map<string, string>();
-    for (const c of COURSES) {
+    for (const c of activeCourses) {
       const cfg = buildMergedCourseConfig(c.id, courseConfigs[c.id]);
       for (const u of cfg.unitList) {
         if (!map.has(u.cuCode)) {
@@ -455,7 +524,7 @@ export function InstructorConsoleView({
       cuCode: code,
       label,
     }));
-  }, [progressCourseFilter, courseConfigs]);
+  }, [progressCourseFilter, activeCourses, courseConfigs]);
 
   const filteredCuProgress = useMemo(() => {
     const q = progressSearch.trim().toLowerCase();
@@ -520,16 +589,16 @@ export function InstructorConsoleView({
   ]);
 
   const activeSessionFullCuCsv = useMemo(() => {
-    const validCourse = getCourseById(activeSession?.courseId);
     if (
-      !validCourse ||
+      !activeSession?.courseId ||
+      !isValidCourseIdSlug(activeSession.courseId) ||
       !activeSession?.cuCode ||
       !isValidCuCode(activeSession.cuCode)
     ) {
       return null;
     }
     return compileFullCuAttendanceCsv({
-      courseId: validCourse.id,
+      courseId: activeSession.courseId,
       cuCode: activeSession.cuCode,
       batchFilter: activeSession.batch?.trim() || 'all',
       sessions,
@@ -610,6 +679,11 @@ export function InstructorConsoleView({
       return;
     }
 
+    if (sessionMode === 'program' && (!courseId || !isValidCourseIdSlug(courseId))) {
+      setFormError('Please select or add a Course Program in Tetapan Subjek first.');
+      return;
+    }
+
     const standaloneLabel =
       standaloneType === '__none__'
         ? ''
@@ -617,13 +691,22 @@ export function InstructorConsoleView({
           ? customStandaloneLabel.trim()
           : standaloneType;
 
+    const selectedProgramMeta =
+      sessionMode === 'program'
+        ? activeCourses.find((c) => c.id === courseId) ||
+          getCourseDisplayMeta(courseId, courseConfigs)
+        : null;
+
     setCreating(true);
     try {
       const newId = await createSessionWithQr(user, {
         trainerName: trainerName.trim(),
         classLab: classLab.trim(),
         courseId: sessionMode === 'program' ? courseId : undefined,
-        courseName: sessionMode === 'standalone' ? standaloneLabel : undefined,
+        courseName:
+          sessionMode === 'program'
+            ? selectedProgramMeta?.name
+            : standaloneLabel,
         cuCode: sessionMode === 'program' ? cuCode : undefined,
         batch: batch.trim(),
         week: week.trim(),
@@ -655,14 +738,16 @@ export function InstructorConsoleView({
 
   const openEditForm = () => {
     if (!activeSession || activeSession.isEnded) return;
-    const matchedCourse = getCourseById(activeSession.courseId);
-    if (matchedCourse) {
+    const hasProgramCourse = Boolean(
+      activeSession.courseId && isValidCourseIdSlug(activeSession.courseId)
+    );
+    if (hasProgramCourse && activeSession.courseId) {
       setEditSessionMode('program');
-      setEditCourseId(matchedCourse.id);
+      setEditCourseId(activeSession.courseId);
       const defaultCode =
         buildMergedCourseConfig(
-          matchedCourse.id,
-          courseConfigs[matchedCourse.id]
+          activeSession.courseId,
+          courseConfigs[activeSession.courseId]
         ).unitList[0]?.cuCode || 'CU01';
       setEditCuCode(
         isValidCuCode(activeSession.cuCode) ? activeSession.cuCode : defaultCode
@@ -671,11 +756,12 @@ export function InstructorConsoleView({
       setEditCustomStandaloneLabel('');
     } else {
       setEditSessionMode('standalone');
-      setEditCourseId(COURSES[0].id);
+      const fallbackCourseId = activeCourses[0]?.id || 'dkm-creative-multimedia';
+      setEditCourseId(fallbackCourseId);
       setEditCuCode(
         buildMergedCourseConfig(
-          COURSES[0].id,
-          courseConfigs[COURSES[0].id]
+          fallbackCourseId,
+          courseConfigs[fallbackCourseId]
         ).unitList[0]?.cuCode || 'CU01'
       );
       const existingLabel = (activeSession.courseName || '').trim();
@@ -713,6 +799,10 @@ export function InstructorConsoleView({
       setEditError('Trainer Name is required.');
       return;
     }
+    if (editSessionMode === 'program' && (!editCourseId || !isValidCourseIdSlug(editCourseId))) {
+      setEditError('Please select a valid Course Program.');
+      return;
+    }
     if (editSessionMode === 'program' && editBatch.trim().length < 1) {
       setEditError('Batch is required for Program & CU classes.');
       return;
@@ -737,6 +827,12 @@ export function InstructorConsoleView({
           ? editCustomStandaloneLabel.trim()
           : editStandaloneType;
 
+    const editProgramMeta =
+      editSessionMode === 'program'
+        ? activeCourses.find((c) => c.id === editCourseId) ||
+          getCourseDisplayMeta(editCourseId, courseConfigs, activeSession.courseName)
+        : null;
+
     setSavingEdit(true);
     try {
       await updateSessionDetails(activeSession.id, {
@@ -744,7 +840,9 @@ export function InstructorConsoleView({
         classLab: editClassLab.trim(),
         courseId: editSessionMode === 'program' ? editCourseId : undefined,
         courseName:
-          editSessionMode === 'standalone' ? editStandaloneLabel : undefined,
+          editSessionMode === 'program'
+            ? editProgramMeta?.name
+            : editStandaloneLabel,
         cuCode: editSessionMode === 'program' ? editCuCode : undefined,
         batch: editBatch.trim(),
         week: editWeek.trim(),
@@ -901,7 +999,8 @@ export function InstructorConsoleView({
       'Email',
       'Attended Days',
       'Target Days',
-      '80% Minimum Days',
+      'Required %',
+      'Minimum Days',
       'Completion %',
       'Exam Eligibility',
     ];
@@ -915,6 +1014,7 @@ export function InstructorConsoleView({
       row.studentEmail,
       row.attendedDays,
       row.targetDays,
+      `${row.requiredPercentage}%`,
       row.minRequiredDays,
       row.percentageLabel,
       row.isExamEligible ? 'Exam Eligible' : `Need ${row.daysNeededFor80} more`,
@@ -924,7 +1024,7 @@ export function InstructorConsoleView({
       .map((row) => row.map(escapeCsvCellValue).join(','))
       .join('\n');
 
-    triggerCsvDownload('todak-academy-cu-80-eligibility.csv', csv);
+    triggerCsvDownload('todak-academy-cu-eligibility.csv', csv);
     setProgressCsvDownloaded(true);
     window.setTimeout(() => setProgressCsvDownloaded(false), 2000);
   };
@@ -938,7 +1038,13 @@ export function InstructorConsoleView({
 
   const handleDraftUnitField = (
     index: number,
-    field: 'cuCode' | 'unitName' | 'levelLabel' | 'weeks' | 'targetDays',
+    field:
+      | 'cuCode'
+      | 'unitName'
+      | 'levelLabel'
+      | 'weeks'
+      | 'targetDays'
+      | 'requiredPercentage',
     value: string
   ) => {
     setSetupSavedMessage(null);
@@ -959,6 +1065,15 @@ export function InstructorConsoleView({
         if (field === 'levelLabel') {
           return { ...row, levelLabel: value };
         }
+        if (field === 'requiredPercentage') {
+          const parsedPct = parseInt(value || '80', 10);
+          return {
+            ...row,
+            requiredPercentage: Number.isNaN(parsedPct)
+              ? 80
+              : Math.min(100, Math.max(1, parsedPct)),
+          };
+        }
         const parsed = Math.max(1, parseInt(value || '1', 10) || 1);
         if (field === 'weeks') {
           const nextWeeks = Math.min(52, parsed);
@@ -978,7 +1093,7 @@ export function InstructorConsoleView({
 
   const handleAddDraftRow = () => {
     if (draftUnits.length >= 50) {
-      setSetupError('Maximum 50 unit rows per course.');
+      setSetupError('Maximum 50 subject / unit rows per program.');
       return;
     }
     setSetupSavedMessage(null);
@@ -989,9 +1104,10 @@ export function InstructorConsoleView({
       ...prev,
       {
         cuCode: `MOD-${String(nextNum).padStart(2, '0')}`,
-        unitName: `New Class / Unit ${nextNum}`,
+        unitName: `New Subject / Unit ${nextNum}`,
         weeks: 1,
         targetDays: 5,
+        requiredPercentage: 80,
       },
     ]);
   };
@@ -1005,16 +1121,149 @@ export function InstructorConsoleView({
   };
 
   const handleRestoreDefaults = () => {
+    const builtIn = getCourseById(setupCourseId);
+    if (!builtIn) return;
     setSetupSavedMessage(null);
     setSetupError(null);
     setSetupDirty(true);
+    setDraftCourseName(builtIn.name);
+    setDraftCourseShortName(builtIn.shortName);
     setDraftUnits(getDefaultUnitList(setupCourseId));
+  };
+
+  const handleCreateProgram = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddProgramError(null);
+    setSetupError(null);
+    setSetupSavedMessage(null);
+
+    const cleanName = newProgramName.trim().slice(0, 120);
+    if (cleanName.length < 2) {
+      setAddProgramError('Program Name must be at least 2 characters.');
+      return;
+    }
+    const cleanShort = (newProgramShortName.trim() || cleanName).slice(0, 60);
+
+    const manualSlug = newProgramSlugInput.trim();
+    let candidateId = manualSlug
+      ? slugifyCourseId(manualSlug)
+      : slugifyCourseId(cleanName);
+
+    if (manualSlug && !isValidCourseIdSlug(candidateId)) {
+      setAddProgramError(
+        'Program ID must be 2–64 letters, numbers, hyphens, or underscores.'
+      );
+      return;
+    }
+
+    const isTaken = (id: string) =>
+      activeCourses.some((c) => c.id === id) ||
+      Boolean(courseConfigs[id] && !courseConfigs[id].isDeleted);
+
+    if (isTaken(candidateId)) {
+      if (manualSlug) {
+        setAddProgramError(
+          `Program ID "${candidateId}" already exists. Choose a different ID.`
+        );
+        return;
+      }
+      let suffix = 2;
+      while (isTaken(`${candidateId}-${suffix}`)) {
+        suffix += 1;
+      }
+      candidateId = `${candidateId.slice(0, 56)}-${suffix}`;
+    }
+
+    const starterUnits: CuUnitConfig[] = [
+      {
+        cuCode: 'CU01',
+        unitName: 'Competency Unit 01',
+        weeks: 1,
+        targetDays: 5,
+        requiredPercentage: 80,
+      },
+    ];
+
+    setAddingProgram(true);
+    try {
+      await saveCourseCuConfig(user, candidateId, starterUnits, {
+        courseName: cleanName,
+        courseShortName: cleanShort,
+        isDeleted: false,
+      });
+      setSetupCourseId(candidateId);
+      setSetupDirty(false);
+      setShowAddProgramForm(false);
+      setNewProgramName('');
+      setNewProgramShortName('');
+      setNewProgramSlugInput('');
+      setSetupSavedMessage(
+        `Added new program "${cleanName}". You can now edit its subjects and minimum attendance percentages below.`
+      );
+    } catch (err) {
+      setAddProgramError(
+        err instanceof Error ? err.message : 'Failed to create program.'
+      );
+    } finally {
+      setAddingProgram(false);
+    }
+  };
+
+  const handleDeleteSelectedProgram = async () => {
+    if (!setupCourseId) return;
+    setSetupError(null);
+    setSetupSavedMessage(null);
+    setDeletingProgram(true);
+    const removedName =
+      draftCourseName.trim() ||
+      activeCourses.find((c) => c.id === setupCourseId)?.name ||
+      setupCourseId;
+
+    try {
+      await deleteCourseProgram(
+        user,
+        setupCourseId,
+        courseConfigs[setupCourseId]
+      );
+      const nextRemaining = activeCourses.find((c) => c.id !== setupCourseId);
+      setConfirmDeleteProgramId(null);
+      setSetupDirty(false);
+      if (nextRemaining) {
+        setSetupCourseId(nextRemaining.id);
+      } else {
+        setSetupCourseId('');
+        setDraftCourseName('');
+        setDraftCourseShortName('');
+        setDraftUnits([]);
+      }
+      setSetupSavedMessage(`Deleted program "${removedName}".`);
+    } catch (err) {
+      setSetupError(
+        err instanceof Error ? err.message : 'Failed to delete program.'
+      );
+    } finally {
+      setDeletingProgram(false);
+    }
   };
 
   const handleSaveCourseSetup = async (e: React.FormEvent) => {
     e.preventDefault();
     setSetupError(null);
     setSetupSavedMessage(null);
+
+    if (!setupCourseId || !isValidCourseIdSlug(setupCourseId)) {
+      setSetupError('Select or add a valid Program first.');
+      return;
+    }
+
+    const cleanProgramName = draftCourseName.trim().slice(0, 120);
+    if (cleanProgramName.length < 2) {
+      setSetupError('Program Name must be at least 2 characters.');
+      return;
+    }
+    const cleanShortName = (
+      draftCourseShortName.trim() || cleanProgramName
+    ).slice(0, 60);
 
     const seenCodes = new Set<string>();
     const preparedList: CuUnitConfig[] = [];
@@ -1024,20 +1273,22 @@ export function InstructorConsoleView({
       const cleanedCode = normalizeCuCode(row.cuCode);
       if (!isValidCuCode(cleanedCode)) {
         setSetupError(
-          `Row ${i + 1}: Unit code must be 2–32 letters/digits (e.g. L3-CU01, CU01, ORIENTASI).`
+          `Row ${i + 1}: Subject/Unit code must be 2–32 letters/digits (e.g. L3-CU01, CU01, ORIENTASI).`
         );
         return;
       }
       if (seenCodes.has(cleanedCode)) {
         setSetupError(
-          `Duplicate unit code "${cleanedCode}" found. Each row must have a unique code.`
+          `Duplicate code "${cleanedCode}" found. Each row must have a unique code.`
         );
         return;
       }
       seenCodes.add(cleanedCode);
 
       if (!row.unitName.trim()) {
-        setSetupError(`Row ${i + 1} (${cleanedCode}) requires a Class / Unit Name.`);
+        setSetupError(
+          `Row ${i + 1} (${cleanedCode}) requires a Subject / Unit Name.`
+        );
         return;
       }
       if (row.weeks < 1 || row.weeks > 52) {
@@ -1045,15 +1296,19 @@ export function InstructorConsoleView({
         return;
       }
       if (row.targetDays < 1 || row.targetDays > 365) {
-        setSetupError(`${cleanedCode} target class days must be between 1 and 365.`);
+        setSetupError(
+          `${cleanedCode} target class days must be between 1 and 365.`
+        );
         return;
       }
+      const reqPct = normalizeRequiredPercentage(row.requiredPercentage);
 
       const nextItem: CuUnitConfig = {
         cuCode: cleanedCode,
         unitName: row.unitName.trim().slice(0, 140),
         weeks: Math.round(row.weeks),
         targetDays: Math.round(row.targetDays),
+        requiredPercentage: reqPct,
       };
       if (row.levelLabel?.trim()) {
         nextItem.levelLabel = row.levelLabel.trim().slice(0, 40);
@@ -1069,17 +1324,20 @@ export function InstructorConsoleView({
 
     setSavingSetup(true);
     try {
-      await saveCourseCuConfig(user, setupCourseId, preparedList);
+      await saveCourseCuConfig(user, setupCourseId, preparedList, {
+        courseName: cleanProgramName,
+        courseShortName: cleanShortName,
+        isDeleted: false,
+      });
       setSetupDirty(false);
-      const course = getCourseById(setupCourseId);
       setSetupSavedMessage(
-        `Saved ${preparedList.length} classes/units (${setupTotals.totalWeeks} weeks · ${setupTotals.totalDays} target days) for ${course?.name || setupCourseId}.`
+        `Saved ${preparedList.length} subjects/units (${setupTotals.totalWeeks} weeks · ${setupTotals.totalDays} target days) for ${cleanProgramName}.`
       );
     } catch (err) {
       setSetupError(
         err instanceof Error
           ? err.message
-          : 'Failed to save CU configuration.'
+          : 'Failed to save Tetapan Subjek.'
       );
     } finally {
       setSavingSetup(false);
@@ -1097,7 +1355,11 @@ export function InstructorConsoleView({
   }, [editClassLab]);
 
   const activeSessionCourseShort =
-    getCourseById(activeSession?.courseId)?.shortName ||
+    getCourseDisplayMeta(
+      activeSession?.courseId,
+      courseConfigs,
+      activeSession?.courseName
+    )?.shortName ||
     activeSession?.courseName ||
     null;
 
@@ -1116,7 +1378,7 @@ export function InstructorConsoleView({
             Instructor Console
           </h1>
           <p className="text-xs text-[#64748B] mt-0.5">
-            Separate classes by Course, Batch, and curriculum unit with live 80% exam eligibility
+            Manage classes by Program, Batch, and Subject with customizable exam attendance thresholds
           </p>
         </div>
 
@@ -1128,8 +1390,8 @@ export function InstructorConsoleView({
           {(
             [
               ['sessions', 'Sessions & Logs'],
-              ['progress', 'CU Progress & 80%'],
-              ['setup', 'CU Setup'],
+              ['progress', 'CU Progress & Eligibility'],
+              ['setup', 'Tetapan Subjek'],
             ] as const
           ).map(([tabKey, label]) => {
             const isActive = consoleTab === tabKey;
@@ -1222,7 +1484,7 @@ export function InstructorConsoleView({
                     className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-[#0F172A] bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F] cursor-pointer"
                   >
                     <option value="all">All Courses</option>
-                    {COURSES.map((c) => (
+                    {activeCourses.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.shortName}
                       </option>
@@ -1344,7 +1606,7 @@ export function InstructorConsoleView({
                     </div>
                     <p className="text-[11px] text-[#64748B] leading-snug">
                       {sessionMode === 'program'
-                        ? 'Attached to a Diploma / Certificate Course & CU (counted toward 80% exam attendance).'
+                        ? 'Attached to a Diploma / Certificate Course & CU (counted toward exam attendance eligibility).'
                         : 'For Short Course, Part-Time, 1-Day Class, or School Program (no Course/CU attached).'}
                     </p>
                   </div>
@@ -1367,7 +1629,10 @@ export function InstructorConsoleView({
                           }}
                           className="w-full min-h-[40px] px-3 py-1.5 text-sm bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F] cursor-pointer"
                         >
-                          {COURSES.map((c) => (
+                          {activeCourses.length === 0 && (
+                            <option value="">No programs yet — add in Tetapan Subjek</option>
+                          )}
+                          {activeCourses.map((c) => (
                             <option key={c.id} value={c.id}>
                               {c.name}
                             </option>
@@ -1666,7 +1931,8 @@ export function InstructorConsoleView({
                       s.sessionDate
                     );
                     const courseShort =
-                      getCourseById(s.courseId)?.shortName || s.courseName;
+                      getCourseDisplayMeta(s.courseId, courseConfigs, s.courseName)
+                        ?.shortName || s.courseName;
 
                     return (
                       <li key={s.id}>
@@ -2019,7 +2285,19 @@ export function InstructorConsoleView({
                                 }}
                                 className="w-full min-h-[40px] px-3 py-1.5 text-sm bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F] cursor-pointer"
                               >
-                                {COURSES.map((c) => (
+                                {editCourseId &&
+                                  !activeCourses.some(
+                                    (c) => c.id === editCourseId
+                                  ) && (
+                                    <option value={editCourseId}>
+                                      {getCourseDisplayMeta(
+                                        editCourseId,
+                                        courseConfigs,
+                                        activeSession.courseName
+                                      )?.name || editCourseId}
+                                    </option>
+                                  )}
+                                {activeCourses.map((c) => (
                                   <option key={c.id} value={c.id}>
                                     {c.name}
                                   </option>
@@ -2518,7 +2796,7 @@ export function InstructorConsoleView({
                     <div className="overflow-x-auto">
                       {(() => {
                         const activeSessionHasCu = Boolean(
-                          getCourseById(activeSession.courseId) &&
+                          isValidCourseIdSlug(activeSession.courseId) &&
                             isValidCuCode(activeSession.cuCode)
                         );
                         return (
@@ -2530,7 +2808,7 @@ export function InstructorConsoleView({
                                 <th className="py-3 px-4">Email</th>
                                 <th className="py-3 px-4 text-center">Sheet Mark</th>
                                 {activeSessionHasCu && (
-                                  <th className="py-3 px-4">CU Status (&ge;80%)</th>
+                                  <th className="py-3 px-4">CU Status</th>
                                 )}
                                 <th className="py-3 px-4 text-right">
                                   Clock-In Time
@@ -2610,6 +2888,7 @@ export function InstructorConsoleView({
                                             </span>
                                             <CuEligibilityFlag
                                               isEligible={cuProgress.isExamEligible}
+                                              requiredPercentage={cuProgress.requiredPercentage}
                                               daysNeededFor80={cuProgress.daysNeededFor80}
                                               compact
                                             />
@@ -2689,51 +2968,73 @@ export function InstructorConsoleView({
       {consoleTab === 'progress' && (
         <div className="space-y-6">
           {/* Summary Strip */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-5">
-              <p className="text-xs text-[#64748B]">Student-Unit Records</p>
-              <p className="text-2xl font-bold font-mono tabular-nums text-[#0F172A] mt-1">
-                {progressStats.total}
-              </p>
-            </div>
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-5">
-              <p className="text-xs text-[#64748B]">80% Exam Gate</p>
-              <p className="text-lg font-bold font-mono tabular-nums text-[#0F172A] mt-1">
-                {progressStats.selectedUnitPreview
-                  ? `${getMinRequiredDaysFor80(progressStats.selectedUnitPreview.targetDays)} / ${progressStats.selectedUnitPreview.targetDays} days`
-                  : '80% of Target Days'}
-              </p>
-              <p className="text-xs text-[#64748B] mt-0.5 tabular-nums">
-                {progressStats.selectedUnitPreview
-                  ? isTaklimatUnit(progressStats.selectedUnitPreview)
-                    ? `${progressStats.selectedUnitPreview.cuCode} · ${progressStats.selectedUnitPreview.targetDays} ${progressStats.selectedUnitPreview.targetDays === 1 ? 'day' : 'days'}`
-                    : `${progressStats.selectedUnitPreview.cuCode} · ${progressStats.selectedUnitPreview.weeks} weeks`
-                  : 'Select Course & Unit to inspect exact days'}
-              </p>
-            </div>
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-5">
-              <p className="text-xs text-[#64748B]">Exam Eligible (&ge;80%)</p>
-              <p className="text-2xl font-bold font-mono tabular-nums text-[#15803D] mt-1">
-                {progressStats.eligible}
-              </p>
-            </div>
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-5">
-              <p className="text-xs text-[#64748B]">Below 80% Threshold</p>
-              <p className="text-2xl font-bold font-mono tabular-nums text-[#DC2626] mt-1">
-                {progressStats.below}
-              </p>
-            </div>
-          </div>
+          {(() => {
+            const previewPct = progressStats.selectedUnitPreview
+              ? normalizeRequiredPercentage(
+                  progressStats.selectedUnitPreview.requiredPercentage
+                )
+              : null;
+            return (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white border border-[#E2E8F0] rounded-xl p-5">
+                  <p className="text-xs text-[#64748B]">Student-Unit Records</p>
+                  <p className="text-2xl font-bold font-mono tabular-nums text-[#0F172A] mt-1">
+                    {progressStats.total}
+                  </p>
+                </div>
+                <div className="bg-white border border-[#E2E8F0] rounded-xl p-5">
+                  <p className="text-xs text-[#64748B]">
+                    {previewPct !== null ? `${previewPct}% Exam Gate` : 'CU Exam Gate'}
+                  </p>
+                  <p className="text-lg font-bold font-mono tabular-nums text-[#0F172A] mt-1">
+                    {progressStats.selectedUnitPreview && previewPct !== null
+                      ? `${getMinRequiredDaysForThreshold(
+                          progressStats.selectedUnitPreview.targetDays,
+                          previewPct
+                        )} / ${progressStats.selectedUnitPreview.targetDays} days`
+                      : 'Per-CU Min %'}
+                  </p>
+                  <p className="text-xs text-[#64748B] mt-0.5 tabular-nums">
+                    {progressStats.selectedUnitPreview
+                      ? isTaklimatUnit(progressStats.selectedUnitPreview)
+                        ? `${progressStats.selectedUnitPreview.cuCode} · ${progressStats.selectedUnitPreview.targetDays} ${progressStats.selectedUnitPreview.targetDays === 1 ? 'day' : 'days'}`
+                        : `${progressStats.selectedUnitPreview.cuCode} · ${progressStats.selectedUnitPreview.weeks} weeks`
+                      : 'Select Program & Subjek to inspect exact days'}
+                  </p>
+                </div>
+                <div className="bg-white border border-[#E2E8F0] rounded-xl p-5">
+                  <p className="text-xs text-[#64748B]">
+                    {previewPct !== null
+                      ? `Exam Eligible (≥${previewPct}%)`
+                      : 'Exam Eligible'}
+                  </p>
+                  <p className="text-2xl font-bold font-mono tabular-nums text-[#15803D] mt-1">
+                    {progressStats.eligible}
+                  </p>
+                </div>
+                <div className="bg-white border border-[#E2E8F0] rounded-xl p-5">
+                  <p className="text-xs text-[#64748B]">
+                    {previewPct !== null
+                      ? `Below ${previewPct}% Threshold`
+                      : 'Below Min Threshold'}
+                  </p>
+                  <p className="text-2xl font-bold font-mono tabular-nums text-[#DC2626] mt-1">
+                    {progressStats.below}
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
 
           <div className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
             <div className="p-5 border-b border-[#E2E8F0] space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h2 className="text-base font-bold text-[#0F172A]">
-                    CU Attendance & 80% Exam Eligibility Roster
+                    CU Attendance &amp; Exam Eligibility Roster
                   </h2>
                   <p className="text-xs text-[#64748B] mt-0.5">
-                    Calculated per student across Course, Batch, and curriculum unit against CU Setup target days (holidays excluded)
+                    Calculated per student across Course, Batch, and Subject against target days &amp; minimum % configured in Tetapan Subjek
                   </p>
                 </div>
 
@@ -2799,8 +3100,10 @@ export function InstructorConsoleView({
                   }}
                   className="min-h-[38px] px-3 py-1.5 text-xs font-medium text-[#0F172A] bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F] cursor-pointer"
                 >
-                  <option value="all">All 4 Courses</option>
-                  {COURSES.map((c) => (
+                  <option value="all">
+                    All Programs ({activeCourses.length})
+                  </option>
+                  {activeCourses.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
@@ -2836,7 +3139,7 @@ export function InstructorConsoleView({
                 </select>
 
                 <select
-                  aria-label="Filter by 80% Exam Status"
+                  aria-label="Filter by Exam Status"
                   value={progressStatusFilter}
                   onChange={(e) =>
                     setProgressStatusFilter(e.target.value as EligibilityFilter)
@@ -2844,8 +3147,8 @@ export function InstructorConsoleView({
                   className="min-h-[38px] px-3 py-1.5 text-xs font-medium text-[#0F172A] bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F] cursor-pointer"
                 >
                   <option value="all">All Statuses</option>
-                  <option value="eligible">Exam Eligible (&ge;80%)</option>
-                  <option value="below">Below 80%</option>
+                  <option value="eligible">Exam Eligible</option>
+                  <option value="below">Below Min %</option>
                 </select>
 
                 <div className="relative">
@@ -2870,7 +3173,7 @@ export function InstructorConsoleView({
                 </p>
                 <p className="text-xs text-[#64748B] max-w-md mx-auto leading-relaxed">
                   {allCuProgress.length === 0
-                    ? 'Create classes with a Course, Batch, and Competency Unit / Module. As students scan QR codes, their live percentages and 80% exam readiness calculate here automatically.'
+                    ? 'Create classes with a Program, Batch, and Subject / CU. As students scan QR codes, their live attendance percentages and exam eligibility calculate here automatically.'
                     : 'Clear or broaden your Course, Batch, Unit, or search filters.'}
                 </p>
                 {allCuProgress.length > 0 && (
@@ -2933,8 +3236,8 @@ export function InstructorConsoleView({
                           </p>
                           <p className="text-[#64748B] tabular-nums">
                             {isTaklimatUnit(row)
-                              ? `${row.targetDays} ${row.targetDays === 1 ? 'day' : 'days'} · Min ${row.minRequiredDays} ${row.minRequiredDays === 1 ? 'day' : 'days'}`
-                              : `${row.weeks} weeks · Min ${row.minRequiredDays} days`}
+                              ? `${row.targetDays} ${row.targetDays === 1 ? 'day' : 'days'} · Min ${row.minRequiredDays} ${row.minRequiredDays === 1 ? 'day' : 'days'} (${row.requiredPercentage}%)`
+                              : `${row.weeks} weeks · Min ${row.minRequiredDays} days (${row.requiredPercentage}%)`}
                           </p>
                         </td>
                         <td className="py-3.5 px-4 text-right font-mono tabular-nums font-semibold text-[#0F172A] whitespace-nowrap">
@@ -2945,11 +3248,13 @@ export function InstructorConsoleView({
                             percentage={row.percentage}
                             percentageLabel={row.percentageLabel}
                             isEligible={row.isExamEligible}
+                            requiredPercentage={row.requiredPercentage}
                           />
                         </td>
                         <td className="py-3.5 px-4 text-right whitespace-nowrap">
                           <CuEligibilityFlag
                             isEligible={row.isExamEligible}
+                            requiredPercentage={row.requiredPercentage}
                             daysNeededFor80={row.daysNeededFor80}
                           />
                         </td>
@@ -2969,24 +3274,139 @@ export function InstructorConsoleView({
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
                 <h2 className="text-base font-bold text-[#0F172A]">
-                  Course Curriculum & Target Days Setup
+                  Tetapan Subjek &amp; Program
                 </h2>
                 <p className="text-xs text-[#64748B] mt-0.5">
-                  Configure required class modules, duration weeks (excluding Cuti Semester holidays), and Target Class Days (default 5 days/week) per course. Changing Weeks auto-updates Target Days to Weeks &times; 5, or override Target Days directly.
+                  Tambah atau kemas kini Program, subjek/CU, tempoh minggu, Target Class Days, dan peratus kehadiran minimum (Min %) bagi setiap CU.
                 </p>
               </div>
-              <div className="text-xs font-mono tabular-nums text-[#0F172A] bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg px-3.5 py-2 shrink-0">
-                <span>{setupTotals.totalModules} classes</span>
-                <span aria-hidden="true"> · </span>
-                <span className="text-[#3F6212] font-bold">
-                  {setupTotals.totalWeeks} weeks
-                </span>
-                <span aria-hidden="true"> · </span>
-                <span>{setupTotals.totalDays} target days</span>
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                {setupCourseId && (
+                  <div className="text-xs font-mono tabular-nums text-[#0F172A] bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg px-3.5 py-2">
+                    <span>{setupTotals.totalModules} subjek</span>
+                    <span aria-hidden="true"> · </span>
+                    <span className="text-[#3F6212] font-bold">
+                      {setupTotals.totalWeeks} weeks
+                    </span>
+                    <span aria-hidden="true"> · </span>
+                    <span>{setupTotals.totalDays} target days</span>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddProgramForm((v) => !v);
+                    setAddProgramError(null);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#3F6212] rounded-lg hover:bg-[#365314] transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {showAddProgramForm ? 'Tutup Borang' : 'Tambah Program'}
+                </button>
               </div>
             </div>
 
-            {setupTotals.excludedHolidays.length > 0 && (
+            {showAddProgramForm && (
+              <form
+                onSubmit={(e) => void handleCreateProgram(e)}
+                className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl space-y-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold text-[#0F172A]">
+                    Tambah Program Baharu
+                  </p>
+                  <span className="text-[11px] text-[#64748B]">
+                    Starts with 1 starter CU row (80% default, editable below)
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label
+                      htmlFor="new-program-name"
+                      className="block text-xs font-medium text-[#475569] mb-1"
+                    >
+                      Program Full Name *
+                    </label>
+                    <input
+                      id="new-program-name"
+                      type="text"
+                      required
+                      maxLength={120}
+                      value={newProgramName}
+                      onChange={(e) => setNewProgramName(e.target.value)}
+                      placeholder="e.g. DKM Creative Technology"
+                      className="w-full min-h-[38px] px-3 py-1.5 text-sm bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="new-program-short"
+                      className="block text-xs font-medium text-[#475569] mb-1"
+                    >
+                      Short Name (Optional)
+                    </label>
+                    <input
+                      id="new-program-short"
+                      type="text"
+                      maxLength={60}
+                      value={newProgramShortName}
+                      onChange={(e) => setNewProgramShortName(e.target.value)}
+                      placeholder="e.g. DKM Creative Tech"
+                      className="w-full min-h-[38px] px-3 py-1.5 text-sm bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="new-program-slug"
+                      className="block text-xs font-medium text-[#475569] mb-1"
+                    >
+                      Program Code / ID (Optional)
+                    </label>
+                    <input
+                      id="new-program-slug"
+                      type="text"
+                      maxLength={64}
+                      value={newProgramSlugInput}
+                      onChange={(e) => setNewProgramSlugInput(e.target.value)}
+                      placeholder={
+                        newProgramName.trim()
+                          ? slugifyCourseId(newProgramName)
+                          : 'auto-generated'
+                      }
+                      className="w-full min-h-[38px] px-3 py-1.5 text-xs font-mono bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                    />
+                  </div>
+                </div>
+                {addProgramError && (
+                  <p role="alert" className="text-xs font-medium text-[#DC2626]">
+                    {addProgramError}
+                  </p>
+                )}
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="submit"
+                    disabled={addingProgram}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#3F6212] rounded-lg hover:bg-[#365314] disabled:opacity-60 cursor-pointer whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    {addingProgram ? 'Menambah...' : 'Simpan Program Baharu'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddProgramForm(false);
+                      setAddProgramError(null);
+                    }}
+                    className="px-3 py-2 min-h-[38px] text-xs font-medium text-[#475569] hover:text-[#0F172A] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {setupTotals.excludedHolidays.length > 0 && setupCourseId && (
               <p className="text-xs text-[#475569] bg-[#F7FEE7] border border-[#D9F99D] rounded-lg px-3.5 py-2">
                 Holiday breaks excluded from required attendance:{' '}
                 <span className="font-medium text-[#1A2E05]">
@@ -2995,236 +3415,369 @@ export function InstructorConsoleView({
               </p>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-              {COURSES.map((c) => {
-                const isSelected = setupCourseId === c.id;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => {
-                      setSetupCourseId(c.id);
-                      setSetupDirty(false);
-                      setSetupSavedMessage(null);
-                      setSetupError(null);
-                    }}
-                    className={`text-left px-3.5 py-2.5 rounded-lg border transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#F7FEE7] border-[#4D7C0F] text-[#1A2E05]'
-                        : 'bg-[#F8FAFC] border-[#E2E8F0] text-[#475569] hover:text-[#0F172A]'
-                    }`}
-                  >
-                    <p className="text-xs font-bold truncate">{c.shortName}</p>
-                    <p className="text-[11px] opacity-80 truncate mt-0.5">
-                      {c.name}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
+            {activeCourses.length === 0 ? (
+              <div className="p-6 text-center bg-[#F8FAFC] border border-dashed border-[#CBD5E1] rounded-xl space-y-2">
+                <p className="text-sm font-semibold text-[#0F172A]">
+                  Tiada Program aktif buat masa ini
+                </p>
+                <p className="text-xs text-[#64748B]">
+                  Klik &ldquo;Tambah Program&rdquo; di atas untuk menambah program dan senarai subjek baharu.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                {activeCourses.map((c) => {
+                  const isSelected = setupCourseId === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        setSetupCourseId(c.id);
+                        setSetupDirty(false);
+                        setSetupSavedMessage(null);
+                        setSetupError(null);
+                        setConfirmDeleteProgramId(null);
+                      }}
+                      className={`text-left px-3.5 py-2.5 rounded-lg border transition-colors cursor-pointer ${
+                        isSelected
+                          ? 'bg-[#F7FEE7] border-[#4D7C0F] text-[#1A2E05]'
+                          : 'bg-[#F8FAFC] border-[#E2E8F0] text-[#475569] hover:text-[#0F172A]'
+                      }`}
+                    >
+                      <p className="text-xs font-bold truncate">{c.shortName}</p>
+                      <p className="text-[11px] opacity-80 truncate mt-0.5">
+                        {c.name}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
-          <form onSubmit={(e) => void handleSaveCourseSetup(e)}>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-semibold text-[#64748B]">
-                    <th className="py-3 px-4 w-12">#</th>
-                    <th className="py-3 px-4 w-44">Code</th>
-                    <th className="py-3 px-4 w-28">Part / Level</th>
-                    <th className="py-3 px-4">Class / Competency Unit Name</th>
-                    <th className="py-3 px-4 w-28 text-right">Weeks</th>
-                    <th className="py-3 px-4 w-32 text-right">
-                      Target Days
-                    </th>
-                    <th className="py-3 px-4 w-28 text-right">80% Min</th>
-                    <th className="py-3 px-4 w-16 text-right">Remove</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E2E8F0] text-xs">
-                  {draftUnits.map((row, index) => {
-                    const minDays = getMinRequiredDaysFor80(
-                      row.targetDays || 1
-                    );
-                    return (
-                      <tr
-                        key={`${index}-${row.cuCode}`}
-                        className="hover:bg-[#F8FAFC] transition-colors"
-                      >
-                        <td className="py-2.5 px-4 font-mono tabular-nums text-[#64748B]">
-                          {index + 1}
-                        </td>
-                        <td className="py-2.5 px-4">
-                          <input
-                            type="text"
-                            required
-                            maxLength={32}
-                            aria-label={`Row ${index + 1} Unit Code`}
-                            value={row.cuCode}
-                            onChange={(e) =>
-                              handleDraftUnitField(index, 'cuCode', e.target.value)
-                            }
-                            className="w-full min-h-[38px] px-2.5 py-1.5 text-xs font-mono font-bold text-[#3F6212] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
-                          />
-                        </td>
-                        <td className="py-2.5 px-4">
-                          <input
-                            type="text"
-                            maxLength={40}
-                            aria-label={`Row ${index + 1} Part or Level`}
-                            value={row.levelLabel || ''}
-                            placeholder="Optional"
-                            onChange={(e) =>
-                              handleDraftUnitField(
-                                index,
-                                'levelLabel',
-                                e.target.value
-                              )
-                            }
-                            className="w-full min-h-[38px] px-2.5 py-1.5 text-xs text-[#475569] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
-                          />
-                        </td>
-                        <td className="py-2.5 px-4">
-                          <input
-                            type="text"
-                            required
-                            maxLength={140}
-                            aria-label={`Row ${index + 1} Class or Unit Name`}
-                            value={row.unitName}
-                            onChange={(e) =>
-                              handleDraftUnitField(
-                                index,
-                                'unitName',
-                                e.target.value
-                              )
-                            }
-                            className="w-full min-w-[220px] min-h-[38px] px-3 py-1.5 text-sm text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
-                          />
-                        </td>
-                        <td className="py-2.5 px-4 text-right">
-                          <input
-                            type="number"
-                            required
-                            min={1}
-                            max={52}
-                            aria-label={`Row ${index + 1} Duration Weeks`}
-                            value={row.weeks}
-                            onChange={(e) =>
-                              handleDraftUnitField(index, 'weeks', e.target.value)
-                            }
-                            className="w-20 min-h-[38px] px-2.5 py-1.5 text-sm text-right font-mono tabular-nums text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
-                          />
-                        </td>
-                        <td className="py-2.5 px-4 text-right">
-                          <input
-                            type="number"
-                            required
-                            min={1}
-                            max={365}
-                            aria-label={`Row ${index + 1} Target Class Days`}
-                            value={row.targetDays}
-                            onChange={(e) =>
-                              handleDraftUnitField(
-                                index,
-                                'targetDays',
-                                e.target.value
-                              )
-                            }
-                            className="w-24 min-h-[38px] px-2.5 py-1.5 text-sm text-right font-mono tabular-nums text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
-                          />
-                        </td>
-                        <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-[#3F6212] whitespace-nowrap">
-                          {minDays} days
-                        </td>
-                        <td className="py-2.5 px-4 text-right">
-                          <button
-                            type="button"
-                            disabled={draftUnits.length <= 1}
-                            onClick={() => handleRemoveDraftRow(index)}
-                            aria-label={`Remove ${row.cuCode}`}
-                            title={`Remove ${row.cuCode}`}
-                            className="p-2 text-[#64748B] hover:text-[#DC2626] disabled:opacity-30 cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          {activeCourses.length > 0 && setupCourseId && (
+            <form onSubmit={(e) => void handleSaveCourseSetup(e)}>
+              <div className="px-5 sm:px-6 py-4 bg-[#F8FAFC] border-b border-[#E2E8F0] flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1">
+                  <div>
+                    <label
+                      htmlFor="edit-program-name"
+                      className="block text-xs font-medium text-[#475569] mb-1"
+                    >
+                      Program Full Name
+                    </label>
+                    <input
+                      id="edit-program-name"
+                      type="text"
+                      required
+                      maxLength={120}
+                      value={draftCourseName}
+                      onChange={(e) => {
+                        setDraftCourseName(e.target.value);
+                        setSetupDirty(true);
+                        setSetupSavedMessage(null);
+                        setSetupError(null);
+                      }}
+                      className="w-full min-h-[38px] px-3 py-1.5 text-sm font-semibold text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="edit-program-short"
+                      className="block text-xs font-medium text-[#475569] mb-1"
+                    >
+                      Short Label
+                    </label>
+                    <input
+                      id="edit-program-short"
+                      type="text"
+                      maxLength={60}
+                      value={draftCourseShortName}
+                      onChange={(e) => {
+                        setDraftCourseShortName(e.target.value);
+                        setSetupDirty(true);
+                        setSetupSavedMessage(null);
+                        setSetupError(null);
+                      }}
+                      className="w-full min-h-[38px] px-3 py-1.5 text-sm text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                    />
+                  </div>
+                </div>
 
-            <div className="p-5 border-t border-[#E2E8F0] bg-[#F8FAFC] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-              <div className="space-y-1 min-w-0">
-                {setupError ? (
-                  <p role="alert" className="text-xs font-medium text-[#DC2626]">
-                    {setupError}
-                  </p>
-                ) : setupSavedMessage ? (
-                  <p className="text-xs font-medium text-[#3F6212]">
-                    {setupSavedMessage}
-                  </p>
-                ) : (
-                  <p className="text-xs text-[#64748B]">
-                    Changes apply across{' '}
-                    <span className="font-semibold text-[#0F172A]">
-                      {getCourseById(setupCourseId)?.name}
-                    </span>{' '}
-                    and recalculate student 80% eligibility immediately.
-                  </p>
-                )}
+                <div className="flex items-center shrink-0">
+                  {confirmDeleteProgramId === setupCourseId ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={deletingProgram}
+                        onClick={() => void handleDeleteSelectedProgram()}
+                        className="px-3 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#DC2626] rounded-lg hover:bg-[#B91C1C] disabled:opacity-60 cursor-pointer whitespace-nowrap"
+                      >
+                        {deletingProgram ? 'Deleting...' : 'Confirm Delete Program'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteProgramId(null)}
+                        className="px-2.5 py-2 min-h-[38px] text-xs font-medium text-[#475569] cursor-pointer whitespace-nowrap"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteProgramId(setupCourseId)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[38px] text-xs font-semibold text-[#DC2626] bg-white border border-[#FCA5A5] rounded-lg hover:bg-[#FEF2F2] transition-colors cursor-pointer whitespace-nowrap"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Delete Program
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleAddDraftRow}
-                  disabled={draftUnits.length >= 50}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-semibold text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg hover:bg-[#F1F5F9] disabled:opacity-40 cursor-pointer whitespace-nowrap"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Add Class / CU
-                </button>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-semibold text-[#64748B]">
+                      <th className="py-3 px-4 w-12">#</th>
+                      <th className="py-3 px-4 w-44">Code</th>
+                      <th className="py-3 px-4 w-28">Part / Level</th>
+                      <th className="py-3 px-4">Subject / Competency Unit Name</th>
+                      <th className="py-3 px-4 w-24 text-right">Weeks</th>
+                      <th className="py-3 px-4 w-28 text-right">
+                        Target Days
+                      </th>
+                      <th className="py-3 px-4 w-24 text-right">Min %</th>
+                      <th className="py-3 px-4 w-28 text-right">Min Days</th>
+                      <th className="py-3 px-4 w-16 text-right">Remove</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E2E8F0] text-xs">
+                    {draftUnits.map((row, index) => {
+                      const rowPct = normalizeRequiredPercentage(
+                        row.requiredPercentage
+                      );
+                      const minDays = getMinRequiredDaysForThreshold(
+                        row.targetDays || 1,
+                        rowPct
+                      );
+                      return (
+                        <tr
+                          key={`${index}-${row.cuCode}`}
+                          className="hover:bg-[#F8FAFC] transition-colors"
+                        >
+                          <td className="py-2.5 px-4 font-mono tabular-nums text-[#64748B]">
+                            {index + 1}
+                          </td>
+                          <td className="py-2.5 px-4">
+                            <input
+                              type="text"
+                              required
+                              maxLength={32}
+                              aria-label={`Row ${index + 1} Unit Code`}
+                              value={row.cuCode}
+                              onChange={(e) =>
+                                handleDraftUnitField(
+                                  index,
+                                  'cuCode',
+                                  e.target.value
+                                )
+                              }
+                              className="w-full min-h-[38px] px-2.5 py-1.5 text-xs font-mono font-bold text-[#3F6212] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                            />
+                          </td>
+                          <td className="py-2.5 px-4">
+                            <input
+                              type="text"
+                              maxLength={40}
+                              aria-label={`Row ${index + 1} Part or Level`}
+                              value={row.levelLabel || ''}
+                              placeholder="Optional"
+                              onChange={(e) =>
+                                handleDraftUnitField(
+                                  index,
+                                  'levelLabel',
+                                  e.target.value
+                                )
+                              }
+                              className="w-full min-h-[38px] px-2.5 py-1.5 text-xs text-[#475569] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                            />
+                          </td>
+                          <td className="py-2.5 px-4">
+                            <input
+                              type="text"
+                              required
+                              maxLength={140}
+                              aria-label={`Row ${index + 1} Subject or Unit Name`}
+                              value={row.unitName}
+                              onChange={(e) =>
+                                handleDraftUnitField(
+                                  index,
+                                  'unitName',
+                                  e.target.value
+                                )
+                              }
+                              className="w-full min-w-[220px] min-h-[38px] px-3 py-1.5 text-sm text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                            />
+                          </td>
+                          <td className="py-2.5 px-4 text-right">
+                            <input
+                              type="number"
+                              required
+                              min={1}
+                              max={52}
+                              aria-label={`Row ${index + 1} Duration Weeks`}
+                              value={row.weeks}
+                              onChange={(e) =>
+                                handleDraftUnitField(
+                                  index,
+                                  'weeks',
+                                  e.target.value
+                                )
+                              }
+                              className="w-20 min-h-[38px] px-2.5 py-1.5 text-sm text-right font-mono tabular-nums text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                            />
+                          </td>
+                          <td className="py-2.5 px-4 text-right">
+                            <input
+                              type="number"
+                              required
+                              min={1}
+                              max={365}
+                              aria-label={`Row ${index + 1} Target Class Days`}
+                              value={row.targetDays}
+                              onChange={(e) =>
+                                handleDraftUnitField(
+                                  index,
+                                  'targetDays',
+                                  e.target.value
+                                )
+                              }
+                              className="w-24 min-h-[38px] px-2.5 py-1.5 text-sm text-right font-mono tabular-nums text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                            />
+                          </td>
+                          <td className="py-2.5 px-4 text-right">
+                            <input
+                              type="number"
+                              required
+                              min={1}
+                              max={100}
+                              aria-label={`Row ${index + 1} Required Percentage`}
+                              value={rowPct}
+                              onChange={(e) =>
+                                handleDraftUnitField(
+                                  index,
+                                  'requiredPercentage',
+                                  e.target.value
+                                )
+                              }
+                              className="w-20 min-h-[38px] px-2.5 py-1.5 text-sm text-right font-mono tabular-nums text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#4D7C0F]"
+                            />
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-[#3F6212] whitespace-nowrap">
+                            {minDays} {minDays === 1 ? 'day' : 'days'}
+                          </td>
+                          <td className="py-2.5 px-4 text-right">
+                            <button
+                              type="button"
+                              disabled={draftUnits.length <= 1}
+                              onClick={() => handleRemoveDraftRow(index)}
+                              aria-label={`Remove ${row.cuCode}`}
+                              title={`Remove ${row.cuCode}`}
+                              className="p-2 text-[#64748B] hover:text-[#DC2626] disabled:opacity-30 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                <button
-                  type="button"
-                  onClick={handleRestoreDefaults}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-medium text-[#475569] bg-white border border-[#E2E8F0] rounded-lg hover:text-[#0F172A] cursor-pointer whitespace-nowrap"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  Restore Planner Defaults
-                </button>
+              <div className="p-5 border-t border-[#E2E8F0] bg-[#F8FAFC] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="space-y-1 min-w-0">
+                  {setupError ? (
+                    <p
+                      role="alert"
+                      className="text-xs font-medium text-[#DC2626]"
+                    >
+                      {setupError}
+                    </p>
+                  ) : setupSavedMessage ? (
+                    <p className="text-xs font-medium text-[#3F6212]">
+                      {setupSavedMessage}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-[#64748B]">
+                      Perubahan untuk{' '}
+                      <span className="font-semibold text-[#0F172A]">
+                        {draftCourseName || setupCourseId}
+                      </span>{' '}
+                      akan mengemas kini pengiraan kelayakan pelajar serta-merta.
+                    </p>
+                  )}
+                </div>
 
-                {setupDirty && (
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
                   <button
                     type="button"
-                    onClick={() => {
-                      setSetupDirty(false);
-                      const merged = buildMergedCourseConfig(
-                        setupCourseId,
-                        courseConfigs[setupCourseId]
-                      );
-                      setDraftUnits(cloneUnitList(merged.unitList));
-                      setSetupError(null);
-                    }}
-                    className="px-3 py-2 min-h-[40px] text-xs font-medium text-[#475569] hover:text-[#0F172A] cursor-pointer whitespace-nowrap"
+                    onClick={handleAddDraftRow}
+                    disabled={draftUnits.length >= 50}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-semibold text-[#0F172A] bg-white border border-[#E2E8F0] rounded-lg hover:bg-[#F1F5F9] disabled:opacity-40 cursor-pointer whitespace-nowrap"
                   >
-                    Discard
+                    <Plus className="w-3.5 h-3.5" />
+                    Tambah Subjek / CU
                   </button>
-                )}
 
-                <button
-                  type="submit"
-                  disabled={savingSetup}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#3F6212] rounded-lg hover:bg-[#365314] disabled:opacity-60 transition-colors cursor-pointer whitespace-nowrap"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  {savingSetup ? 'Saving Setup...' : 'Save Course CU Setup'}
-                </button>
+                  {getCourseById(setupCourseId) && (
+                    <button
+                      type="button"
+                      onClick={handleRestoreDefaults}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-medium text-[#475569] bg-white border border-[#E2E8F0] rounded-lg hover:text-[#0F172A] cursor-pointer whitespace-nowrap"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Restore Defaults
+                    </button>
+                  )}
+
+                  {setupDirty && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSetupDirty(false);
+                        const merged = buildMergedCourseConfig(
+                          setupCourseId,
+                          courseConfigs[setupCourseId]
+                        );
+                        setDraftCourseName(merged.courseName);
+                        setDraftCourseShortName(
+                          merged.courseShortName || merged.courseName
+                        );
+                        setDraftUnits(cloneUnitList(merged.unitList));
+                        setSetupError(null);
+                      }}
+                      className="px-3 py-2 min-h-[40px] text-xs font-medium text-[#475569] hover:text-[#0F172A] cursor-pointer whitespace-nowrap"
+                    >
+                      Discard
+                    </button>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={savingSetup}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#3F6212] rounded-lg hover:bg-[#365314] disabled:opacity-60 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    {savingSetup ? 'Menyimpan...' : 'Save Tetapan Subjek'}
+                  </button>
+                </div>
               </div>
-            </div>
-          </form>
+            </form>
+          )}
         </div>
       )}
     </main>

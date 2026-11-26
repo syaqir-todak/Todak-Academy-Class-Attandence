@@ -14,18 +14,18 @@ A serverless, real-time classroom QR attendance web application built for **Toda
 - **Instructor Console (`Instructor Console`)**:
   - **Program & CU Classes**: Create and manage sessions tied to a Course, Competency Unit / Module, Batch, Week, Room/Lab, and Date.
   - **Standalone / General Classes**: Create ad-hoc classes without attaching a program/CU (e.g., *Short Course*, *Part-Time Course*, *1-Day Class*, *School Program*, *Workshop*).
-  - **80% Exam Eligibility Tracking & Visual Flags**: Green (`Eligible >= 80%`) and Red (`Below 80%`) progress meters and status flags in both the Instructor Console and Student Check-In view, using exact integer 80% thresholds.
-  - **CU Setup Table**: Editable per-course curriculum configuration (module code, part/level, name, duration weeks, and target class days excluding semester holidays) persisted in Firestore.
+  - **Exam Eligibility Tracking & Visual Flags**: Green (`Eligible`) and Red (`Below Min %`) progress meters and status flags in both the Instructor Console and Student Check-In view, using exact integer percentage thresholds configured per CU (default `80%`).
+  - **Tetapan Subjek & Program Management**: Add new programs, rename programs, delete programs, and edit each subject/CU's code, part/level, name, weeks, target days, and minimum attendance `%` (`1–100%`) directly in Firestore.
   - **One-Click CSV Exports**:
     - **Session CSV** named with the CU/module title and week number (`{CU} - Week {N}.csv`).
-    - **Full CU Compiled Sheet** combining every attendance date across an entire CU/Batch into a single matrix CSV (`H` markers, attended days, target days, `%`, and 80% exam eligibility).
+    - **Full CU Compiled Sheet** combining every attendance date across an entire CU/Batch into a single matrix CSV (`H` markers, attended days, target days, `%`, and CU exam eligibility).
     - **Tab-delimited `H` Copy** for fast pasting into Google Sheets attendance planners.
 
 ---
 
 ## Supported Courses & Curriculum Defaults
 
-Default schedules (excluding *Cuti Semester* holidays) are preconfigured in `src/utils/attendance.ts` and customizable in **CU Setup**:
+Default schedules (excluding *Cuti Semester* holidays) are preconfigured in `src/utils/attendance.ts` and customizable (or extendable with new programs) in **Tetapan Subjek**:
 
 1. **DKM 3D Animation Production Operation** (`dkm-3d-animation`) — 18 active modules across 53 active weeks (Cuti Semester 1 & 2 excluded).
 2. **DKM Creative Multimedia Development** (`dkm-creative-multimedia`) — 27 active modules (Part 1 & Part 2, excluding Cuti Semester 01–04).
@@ -64,7 +64,7 @@ Default schedules (excluding *Cuti Semester* holidays) are preconfigured in `src
     ├── components/
     │   ├── AuthView.tsx          # Google Sign-In landing screen (preserves scanned QR query params)
     │   ├── StudentCheckInView.tsx# Camera/link QR check-in, CU progress & 80% status cards
-    │   ├── InstructorConsoleView.tsx # Session management, logs, CSV exports, CU Progress & CU Setup
+    │   ├── InstructorConsoleView.tsx # Session management, logs, CSV exports, CU Progress & Tetapan Subjek
     │   ├── KioskView.tsx         # Projector QR display, countdown & live check-in roster
     │   ├── CuEligibilityStatus.tsx # Green/red 80% eligibility flag & progress meter components
     │   └── ErrorBoundary.tsx     # Graceful Firestore/runtime error fallback UI

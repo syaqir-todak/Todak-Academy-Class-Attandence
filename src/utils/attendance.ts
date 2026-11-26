@@ -123,6 +123,94 @@ export function getCourseById(courseId?: string) {
   return COURSES.find((c) => c.id === courseId) || null;
 }
 
+export function isValidCourseIdSlug(value?: string): value is string {
+  return Boolean(
+    value &&
+      value.length >= 2 &&
+      value.length <= 64 &&
+      /^[a-zA-Z0-9_-]+$/.test(value)
+  );
+}
+
+export function slugifyCourseId(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return cleaned || `program-${Date.now().toString(36)}`;
+}
+
+export function normalizeRequiredPercentage(raw?: number): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return Math.min(100, Math.max(1, Math.round(raw)));
+  }
+  return 80;
+}
+
+export interface ActiveCourseSummary {
+  id: string;
+  name: string;
+  shortName: string;
+  isDefault: boolean;
+}
+
+export function getCourseDisplayMeta(
+  courseId?: string,
+  courseConfigs?: Record<string, CourseCuConfigDoc>,
+  fallbackName?: string
+): { id: string; name: string; shortName: string } | null {
+  if (!courseId || !isValidCourseIdSlug(courseId)) return null;
+  const builtIn = getCourseById(courseId);
+  const stored = courseConfigs?.[courseId];
+  const name =
+    stored?.courseName?.trim() ||
+    builtIn?.name ||
+    fallbackName?.trim() ||
+    courseId;
+  const shortName =
+    stored?.courseShortName?.trim() ||
+    builtIn?.shortName ||
+    name.slice(0, 28);
+  return { id: courseId, name, shortName };
+}
+
+export function getActiveCourseList(
+  courseConfigs: Record<string, CourseCuConfigDoc>
+): ActiveCourseSummary[] {
+  const result: ActiveCourseSummary[] = [];
+  const seen = new Set<string>();
+
+  for (const def of COURSES) {
+    const stored = courseConfigs[def.id];
+    seen.add(def.id);
+    if (stored?.isDeleted) continue;
+    result.push({
+      id: def.id,
+      name: stored?.courseName?.trim() || def.name,
+      shortName: stored?.courseShortName?.trim() || def.shortName,
+      isDefault: true,
+    });
+  }
+
+  const customList: ActiveCourseSummary[] = [];
+  for (const [id, cfg] of Object.entries(courseConfigs)) {
+    if (seen.has(id) || cfg.isDeleted) continue;
+    if (!isValidCourseIdSlug(id)) continue;
+    const name = cfg.courseName?.trim() || id;
+    customList.push({
+      id,
+      name,
+      shortName: cfg.courseShortName?.trim() || name.slice(0, 28),
+      isDefault: false,
+    });
+  }
+
+  customList.sort((a, b) => a.name.localeCompare(b.name));
+  return [...result, ...customList];
+}
+
 export function isTaklimatUnit(unit: {
   cuCode?: string;
   unitName?: string;
@@ -189,12 +277,14 @@ export function sanitizeUnitItem(raw: Partial<CuUnitConfig>, fallbackIndex = 1):
     typeof raw.targetDays === 'number' && Number.isFinite(raw.targetDays) && raw.targetDays >= 1
       ? Math.min(365, Math.round(raw.targetDays))
       : weeks * 5;
+  const requiredPercentage = normalizeRequiredPercentage(raw.requiredPercentage);
 
   const item: CuUnitConfig = {
     cuCode,
     unitName: (raw.unitName || '').trim().slice(0, 140) || cuCode,
     weeks,
     targetDays,
+    requiredPercentage,
   };
 
   if (raw.levelLabel?.trim()) {
@@ -214,7 +304,12 @@ export function buildMergedCourseConfig(
   courseId: CourseId,
   stored?: CourseCuConfigDoc | null
 ): CourseCuConfigDoc {
-  const course = getCourseById(courseId) || COURSES[0];
+  const builtIn = getCourseById(courseId);
+  const resolvedId = builtIn?.id || (isValidCourseIdSlug(courseId) ? courseId : COURSES[0].id);
+  const resolvedName =
+    stored?.courseName?.trim() || builtIn?.name || resolvedId;
+  const resolvedShortName =
+    stored?.courseShortName?.trim() || builtIn?.shortName || resolvedName.slice(0, 28);
   let unitList: CuUnitConfig[];
 
   if (stored?.unitList && Array.isArray(stored.unitList) && stored.unitList.length > 0) {
@@ -225,24 +320,26 @@ export function buildMergedCourseConfig(
       entries.sort((a, b) => a.cuCode.localeCompare(b.cuCode, undefined, { numeric: true }));
       unitList = entries.slice(0, 50).map((u, idx) => sanitizeUnitItem(u, idx + 1));
     } else {
-      unitList = getDefaultUnitList(course.id);
+      unitList = getDefaultUnitList(resolvedId).map((u, idx) => sanitizeUnitItem(u, idx + 1));
     }
   } else {
-    unitList = getDefaultUnitList(course.id);
+    unitList = getDefaultUnitList(resolvedId).map((u, idx) => sanitizeUnitItem(u, idx + 1));
   }
 
   return {
-    courseId: course.id,
-    courseName: course.name,
+    courseId: resolvedId,
+    courseName: resolvedName,
+    courseShortName: resolvedShortName,
+    isDeleted: Boolean(stored?.isDeleted),
     unitList,
     excludedHolidays:
-      course.id === 'dkm-3d-animation'
+      resolvedId === 'dkm-3d-animation'
         ? ANIMATION_3D_EXCLUDED_HOLIDAYS
-        : course.id === 'dkm-creative-multimedia'
+        : resolvedId === 'dkm-creative-multimedia'
           ? CREATIVE_MULTIMEDIA_EXCLUDED_HOLIDAYS
-          : course.id === 'skm-3d-game-assets'
+          : resolvedId === 'skm-3d-game-assets'
             ? GAME_ASSETS_EXCLUDED_HOLIDAYS
-            : course.id === 'skm-3d-production-support'
+            : resolvedId === 'skm-3d-production-support'
               ? PRODUCTION_SUPPORT_EXCLUDED_HOLIDAYS
               : undefined,
     updatedByUid: stored?.updatedByUid,
@@ -284,9 +381,17 @@ export function formatCuPrefixedTitle(cuCode: string, rawTitle: string): string 
   return `${upperCode} - ${cleanTitle}`;
 }
 
-export function getMinRequiredDaysFor80(targetDays: number): number {
+export function getMinRequiredDaysForThreshold(
+  targetDays: number,
+  requiredPercentage = 80
+): number {
   const safeTarget = Math.max(1, Math.round(targetDays));
-  return Math.floor((safeTarget * 4 + 4) / 5);
+  const safePct = normalizeRequiredPercentage(requiredPercentage);
+  return Math.floor((safeTarget * safePct + 99) / 100);
+}
+
+export function getMinRequiredDaysFor80(targetDays: number): number {
+  return getMinRequiredDaysForThreshold(targetDays, 80);
 }
 
 export interface StudentCuProgressSummary {
@@ -303,6 +408,7 @@ export interface StudentCuProgressSummary {
   levelLabel?: string;
   weeks: number;
   targetDays: number;
+  requiredPercentage: number;
   minRequiredDays: number;
   attendedDays: number;
   percentage: number;
@@ -332,7 +438,7 @@ export function calculateStudentCuProgress(
   const groups = new Map<string, Accumulator>();
 
   for (const rec of records) {
-    const course = getCourseById(rec.courseId);
+    const course = getCourseDisplayMeta(rec.courseId, courseConfigs, rec.courseName);
     if (!course || !isValidCuCode(rec.cuCode)) {
       continue;
     }
@@ -375,7 +481,11 @@ export function calculateStudentCuProgress(
     const unitName = unit?.unitName || acc.fallbackTitle || acc.cuCode;
     const weeks = unit?.weeks ?? 11;
     const targetDays = Math.max(1, unit?.targetDays ?? 55);
-    const minRequiredDays = getMinRequiredDaysFor80(targetDays);
+    const requiredPercentage = normalizeRequiredPercentage(unit?.requiredPercentage);
+    const minRequiredDays = getMinRequiredDaysForThreshold(
+      targetDays,
+      requiredPercentage
+    );
     const attendedDays = acc.attendedKeys.size;
     const rawPct = Math.min(100, (attendedDays / targetDays) * 100);
     const percentage = Math.round(rawPct * 10) / 10;
@@ -399,6 +509,7 @@ export function calculateStudentCuProgress(
       levelLabel: unit?.levelLabel,
       weeks,
       targetDays,
+      requiredPercentage,
       minRequiredDays,
       attendedDays,
       percentage,
@@ -430,13 +541,18 @@ export function getStudentCuStatusForSession(params: {
   studentName: string;
   studentEmail: string;
   courseId?: string;
+  courseName?: string;
   cuCode?: string;
   batch?: string;
   fallbackTitle?: string;
   records: AttendanceRecordDoc[];
   courseConfigs: Record<string, CourseCuConfigDoc>;
 }): StudentCuProgressSummary | null {
-  const course = getCourseById(params.courseId);
+  const course = getCourseDisplayMeta(
+    params.courseId,
+    params.courseConfigs,
+    params.courseName
+  );
   if (!course || !isValidCuCode(params.cuCode)) return null;
 
   const batch = (params.batch || '').trim() || 'General';
@@ -457,7 +573,11 @@ export function getStudentCuStatusForSession(params: {
   const unitOrderIndex = unit ? config.unitList.indexOf(unit) : 999;
   const weeks = unit?.weeks ?? 11;
   const targetDays = Math.max(1, unit?.targetDays ?? 55);
-  const minRequiredDays = getMinRequiredDaysFor80(targetDays);
+  const requiredPercentage = normalizeRequiredPercentage(unit?.requiredPercentage);
+  const minRequiredDays = getMinRequiredDaysForThreshold(
+    targetDays,
+    requiredPercentage
+  );
 
   return {
     key: `${params.studentUid}::${course.id}::${batch.toLowerCase()}::${params.cuCode}`,
@@ -473,6 +593,7 @@ export function getStudentCuStatusForSession(params: {
     levelLabel: unit?.levelLabel,
     weeks,
     targetDays,
+    requiredPercentage,
     minRequiredDays,
     attendedDays: 0,
     percentage: 0,
@@ -546,7 +667,7 @@ export function compileFullCuAttendanceCsv(params: {
   const { courseId, cuCode, batchFilter, sessions, records, courseConfigs } =
     params;
 
-  const course = getCourseById(courseId);
+  const course = getCourseDisplayMeta(courseId, courseConfigs);
   if (!course || !isValidCuCode(cuCode)) return null;
 
   const config = buildMergedCourseConfig(courseId, courseConfigs[courseId]);
@@ -554,7 +675,11 @@ export function compileFullCuAttendanceCsv(params: {
   const unitName = unit?.unitName || cuCode;
   const weeks = unit?.weeks ?? 11;
   const targetDays = Math.max(1, unit?.targetDays ?? 55);
-  const minRequiredDays = getMinRequiredDaysFor80(targetDays);
+  const requiredPercentage = normalizeRequiredPercentage(unit?.requiredPercentage);
+  const minRequiredDays = getMinRequiredDaysForThreshold(
+    targetDays,
+    requiredPercentage
+  );
 
   const normalizedBatchFilter =
     batchFilter && batchFilter !== 'all' ? batchFilter.trim() : 'all';
@@ -669,7 +794,7 @@ export function compileFullCuAttendanceCsv(params: {
     'Duration',
     durationLabel,
     'Target Days',
-    `${targetDays} (80% Min: ${minRequiredDays})`,
+    `${targetDays} (${requiredPercentage}% Min: ${minRequiredDays})`,
     'Batch',
     normalizedBatchFilter === 'all' ? 'All Batches' : normalizedBatchFilter,
   ];
@@ -685,7 +810,7 @@ export function compileFullCuAttendanceCsv(params: {
     'Days Attended',
     'Target Days',
     'Completion %',
-    '80% Exam Status',
+    `${requiredPercentage}% Exam Status`,
   ];
 
   const dataRows = studentRows.map((student, idx) => {

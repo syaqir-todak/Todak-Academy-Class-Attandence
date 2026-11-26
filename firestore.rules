@@ -31,12 +31,7 @@ service cloud.firestore {
     }
 
     function isValidCourseId(id) {
-      return id in [
-        'dkm-3d-animation',
-        'dkm-creative-multimedia',
-        'skm-3d-production-support',
-        'skm-3d-game-assets'
-      ];
+      return id is string && id.size() >= 2 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function isValidCuCode(code) {
@@ -68,22 +63,25 @@ service cloud.firestore {
     function isValidCuUnitItem(unit) {
       return unit is map &&
         unit.keys().hasAll(['cuCode', 'unitName', 'weeks', 'targetDays']) &&
-        unit.keys().hasOnly(['cuCode', 'unitName', 'levelLabel', 'category', 'totalHours', 'weeks', 'targetDays']) &&
+        unit.keys().hasOnly(['cuCode', 'unitName', 'levelLabel', 'category', 'totalHours', 'weeks', 'targetDays', 'requiredPercentage']) &&
         isValidCuCode(unit.cuCode) &&
         unit.unitName is string && unit.unitName.size() >= 1 && unit.unitName.size() <= 140 &&
         (!('levelLabel' in unit) || (unit.levelLabel is string && unit.levelLabel.size() <= 40)) &&
         (!('category' in unit) || (unit.category is string && unit.category.size() <= 40)) &&
         (!('totalHours' in unit) || (unit.totalHours is number && unit.totalHours >= 0 && unit.totalHours <= 2000)) &&
         unit.weeks is number && unit.weeks >= 1 && unit.weeks <= 52 &&
-        unit.targetDays is number && unit.targetDays >= 1 && unit.targetDays <= 365;
+        unit.targetDays is number && unit.targetDays >= 1 && unit.targetDays <= 365 &&
+        (!('requiredPercentage' in unit) || (unit.requiredPercentage is number && unit.requiredPercentage >= 1 && unit.requiredPercentage <= 100));
     }
 
     function isValidCourseCuConfig(data, courseId) {
       return data.keys().hasAll(['courseId', 'courseName', 'unitList', 'updatedByUid', 'updatedAt']) &&
-        data.keys().hasOnly(['courseId', 'courseName', 'unitList', 'updatedByUid', 'updatedAt']) &&
+        data.keys().hasOnly(['courseId', 'courseName', 'courseShortName', 'isDeleted', 'unitList', 'updatedByUid', 'updatedAt']) &&
         isValidCourseId(courseId) &&
         data.courseId == courseId &&
         data.courseName is string && data.courseName.size() >= 2 && data.courseName.size() <= 120 &&
+        (!('courseShortName' in data) || (data.courseShortName is string && data.courseShortName.size() >= 1 && data.courseShortName.size() <= 60)) &&
+        (!('isDeleted' in data) || data.isDeleted is bool) &&
         isValidId(data.updatedByUid) &&
         data.updatedByUid == request.auth.uid &&
         data.updatedAt is timestamp &&
@@ -256,11 +254,11 @@ service cloud.firestore {
     }
 
     // -------------------------------------------------------------------------
-    // Course CU Setup Configs (4 deterministic non-PII curriculum docs)
+    // Course & Subject Setup Configs (Non-PII curriculum docs)
     // -------------------------------------------------------------------------
     match /courseCuConfigs/{courseId} {
       allow get: if isEmailVerified() && isValidCourseId(courseId);
-      allow list: if false;
+      allow list: if isEmailVerified();
 
       allow create: if isAdmin() &&
         isValidCourseCuConfig(incoming(), courseId) &&
@@ -271,13 +269,15 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly([
           'courseName',
+          'courseShortName',
+          'isDeleted',
           'unitList',
           'units',
           'updatedByUid',
           'updatedAt'
         ]);
 
-      allow delete: if false;
+      allow delete: if isAdmin() && isValidCourseId(courseId);
     }
 
     // -------------------------------------------------------------------------

@@ -2,23 +2,25 @@ import { Flag } from 'lucide-react';
 
 interface CuEligibilityFlagProps {
   isEligible: boolean;
+  requiredPercentage?: number;
   daysNeededFor80?: number;
   compact?: boolean;
 }
 
 export function CuEligibilityFlag({
   isEligible,
+  requiredPercentage = 80,
   daysNeededFor80 = 0,
   compact = false,
 }: CuEligibilityFlagProps) {
   if (isEligible) {
     return (
       <span
-        title="Attendance meets or exceeds the 80% exam eligibility threshold"
+        title={`Attendance meets or exceeds the ${requiredPercentage}% exam eligibility threshold`}
         className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border border-[#86EFAC] bg-[#F0FDF4] text-[#15803D] text-[11px] font-semibold whitespace-nowrap shrink-0"
       >
         <Flag className="w-3 h-3 fill-[#16A34A] text-[#16A34A] shrink-0" />
-        <span>Eligible (&ge;80%)</span>
+        <span>Eligible (&ge;{requiredPercentage}%)</span>
       </span>
     );
   }
@@ -27,16 +29,16 @@ export function CuEligibilityFlag({
     <span
       title={
         daysNeededFor80 > 0
-          ? `Below 80% exam threshold — ${daysNeededFor80} more day(s) needed`
-          : 'Below 80% exam threshold'
+          ? `Below ${requiredPercentage}% exam threshold — ${daysNeededFor80} more day(s) needed`
+          : `Below ${requiredPercentage}% exam threshold`
       }
       className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border border-[#FCA5A5] bg-[#FEF2F2] text-[#DC2626] text-[11px] font-semibold whitespace-nowrap shrink-0"
     >
       <Flag className="w-3 h-3 fill-[#DC2626] text-[#DC2626] shrink-0" />
       <span>
         {compact || daysNeededFor80 <= 0
-          ? 'Below 80%'
-          : `Below 80% · Need ${daysNeededFor80}d`}
+          ? `Below ${requiredPercentage}%`
+          : `Below ${requiredPercentage}% · Need ${daysNeededFor80}d`}
       </span>
     </span>
   );
@@ -46,6 +48,7 @@ interface CuProgressMeterProps {
   percentage: number;
   percentageLabel: string;
   isEligible: boolean;
+  requiredPercentage?: number;
   showPercentageLabel?: boolean;
 }
 
@@ -53,9 +56,11 @@ export function CuProgressMeter({
   percentage,
   percentageLabel,
   isEligible,
+  requiredPercentage = 80,
   showPercentageLabel = true,
 }: CuProgressMeterProps) {
   const clampedWidth = Math.max(0, Math.min(100, percentage));
+  const clampedMarker = Math.max(1, Math.min(100, requiredPercentage));
 
   return (
     <div className="flex items-center gap-2.5">
@@ -68,8 +73,9 @@ export function CuProgressMeter({
         />
         <div
           aria-hidden="true"
-          title="80% Exam Eligibility Threshold"
-          className="absolute top-0 bottom-0 left-[80%] w-0.5 bg-[#0F172A]/45"
+          title={`${clampedMarker}% Exam Eligibility Threshold`}
+          style={{ left: `${clampedMarker}%` }}
+          className="absolute top-0 bottom-0 w-0.5 bg-[#0F172A]/45"
         />
       </div>
       {showPercentageLabel && (

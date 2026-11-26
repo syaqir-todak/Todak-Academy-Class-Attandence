@@ -2,12 +2,12 @@
   "entities": {
     "CourseCuConfig": {
       "title": "CourseCuConfig",
-      "description": "Instructor-configurable course curriculum units/modules (names, duration weeks, and target class days excluding holidays) per major course.",
+      "description": "Instructor-configurable program/course curriculum units (names, duration weeks, target class days, and minimum required attendance percentage per CU).",
       "type": "object",
       "properties": {
         "courseId": {
           "type": "string",
-          "minLength": 1,
+          "minLength": 2,
           "maxLength": 64,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
@@ -16,9 +16,17 @@
           "minLength": 2,
           "maxLength": 120
         },
+        "courseShortName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "isDeleted": {
+          "type": "boolean"
+        },
         "unitList": {
           "type": "array",
-          "description": "Ordered bounded list (1-50) of non-holiday curriculum units containing cuCode, unitName, levelLabel, category, totalHours, weeks, and targetDays."
+          "description": "Ordered bounded list (1-50) of non-holiday curriculum units containing cuCode, unitName, levelLabel, category, totalHours, weeks, targetDays, and requiredPercentage (1-100, default 80)."
         },
         "updatedByUid": {
           "type": "string",
