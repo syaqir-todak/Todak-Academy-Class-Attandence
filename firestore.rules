@@ -1,0 +1,457 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Helpers
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidCourseId(id) {
+      return id in [
+        'dkm-3d-animation',
+        'dkm-creative-multimedia',
+        'skm-3d-production-support',
+        'skm-3d-game-assets'
+      ];
+    }
+
+    function isValidCuCode(code) {
+      return code is string && code.size() >= 2 && code.size() <= 32 && code.matches('^[A-Z0-9][A-Z0-9_\\-]{1,31}$');
+    }
+
+    function isValidDeviceId(id) {
+      return id is string && id.size() >= 16 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidToken(tok) {
+      return tok is string && tok.size() >= 12 && tok.size() <= 64 && tok.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isEmailVerified() && (
+        request.auth.token.email == 'syaqir@todak.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isSessionNotEnded(data) {
+      return !('isEnded' in data) || data.isEnded == false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidCuUnitItem(unit) {
+      return unit is map &&
+        unit.keys().hasAll(['cuCode', 'unitName', 'weeks', 'targetDays']) &&
+        unit.keys().hasOnly(['cuCode', 'unitName', 'levelLabel', 'category', 'totalHours', 'weeks', 'targetDays']) &&
+        isValidCuCode(unit.cuCode) &&
+        unit.unitName is string && unit.unitName.size() >= 1 && unit.unitName.size() <= 140 &&
+        (!('levelLabel' in unit) || (unit.levelLabel is string && unit.levelLabel.size() <= 40)) &&
+        (!('category' in unit) || (unit.category is string && unit.category.size() <= 40)) &&
+        (!('totalHours' in unit) || (unit.totalHours is number && unit.totalHours >= 0 && unit.totalHours <= 2000)) &&
+        unit.weeks is number && unit.weeks >= 1 && unit.weeks <= 52 &&
+        unit.targetDays is number && unit.targetDays >= 1 && unit.targetDays <= 365;
+    }
+
+    function isValidCourseCuConfig(data, courseId) {
+      return data.keys().hasAll(['courseId', 'courseName', 'unitList', 'updatedByUid', 'updatedAt']) &&
+        data.keys().hasOnly(['courseId', 'courseName', 'unitList', 'updatedByUid', 'updatedAt']) &&
+        isValidCourseId(courseId) &&
+        data.courseId == courseId &&
+        data.courseName is string && data.courseName.size() >= 2 && data.courseName.size() <= 120 &&
+        isValidId(data.updatedByUid) &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedAt is timestamp &&
+        data.unitList is list &&
+        data.unitList.size() >= 1 &&
+        data.unitList.size() <= 50 &&
+        isValidCuUnitItem(data.unitList[0]);
+    }
+
+    function isValidSession(data) {
+      return data.keys().hasAll([
+        'trainerName',
+        'classLab',
+        'title',
+        'instructorUid',
+        'isOpen',
+        'tokenSequence',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'trainerName',
+        'classLab',
+        'title',
+        'courseId',
+        'courseName',
+        'cuCode',
+        'batch',
+        'week',
+        'sessionDate',
+        'autoRotateSeconds',
+        'instructorUid',
+        'isOpen',
+        'isEnded',
+        'tokenSequence',
+        'createdAt',
+        'updatedAt',
+        'endedAt'
+      ]) &&
+      data.trainerName is string && data.trainerName.size() >= 1 && data.trainerName.size() <= 100 &&
+      data.classLab is string && data.classLab.size() >= 1 && data.classLab.size() <= 64 &&
+      data.title is string && data.title.size() >= 2 && data.title.size() <= 120 &&
+      (!('courseId' in data) || isValidCourseId(data.courseId)) &&
+      (!('courseName' in data) || (data.courseName is string && data.courseName.size() >= 2 && data.courseName.size() <= 120)) &&
+      (!('cuCode' in data) || isValidCuCode(data.cuCode)) &&
+      (!('batch' in data) || (data.batch is string && data.batch.size() <= 64)) &&
+      (!('week' in data) || (data.week is string && data.week.size() <= 40)) &&
+      (!('sessionDate' in data) || (data.sessionDate is string && data.sessionDate.size() == 10 && data.sessionDate.matches('^\\d{4}-\\d{2}-\\d{2}$'))) &&
+      (!('autoRotateSeconds' in data) || (data.autoRotateSeconds is number && (data.autoRotateSeconds == 0 || data.autoRotateSeconds == 15 || data.autoRotateSeconds == 30 || data.autoRotateSeconds == 60))) &&
+      isValidId(data.instructorUid) &&
+      data.isOpen is bool &&
+      (!('isEnded' in data) || data.isEnded is bool) &&
+      data.tokenSequence is number && data.tokenSequence >= 1 && data.tokenSequence <= 1000000 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp &&
+      (!('endedAt' in data) || data.endedAt is timestamp);
+    }
+
+    function isValidQrState(data) {
+      return data.keys().hasAll([
+        'sessionId',
+        'instructorUid',
+        'activeToken',
+        'tokenSequence',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'sessionId',
+        'instructorUid',
+        'activeToken',
+        'previousToken',
+        'lastConsumedToken',
+        'lastConsumedByUid',
+        'lastConsumedByName',
+        'tokenSequence',
+        'updatedAt'
+      ]) &&
+      isValidId(data.sessionId) &&
+      isValidId(data.instructorUid) &&
+      isValidToken(data.activeToken) &&
+      (!('previousToken' in data) || isValidToken(data.previousToken)) &&
+      (!('lastConsumedToken' in data) || isValidToken(data.lastConsumedToken)) &&
+      (!('lastConsumedByUid' in data) || isValidId(data.lastConsumedByUid)) &&
+      (!('lastConsumedByName' in data) || (data.lastConsumedByName is string && data.lastConsumedByName.size() >= 1 && data.lastConsumedByName.size() <= 100)) &&
+      data.tokenSequence is number && data.tokenSequence >= 1 && data.tokenSequence <= 1000000 &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll([
+        'sessionId',
+        'trainerName',
+        'classLab',
+        'sessionTitle',
+        'instructorUid',
+        'studentUid',
+        'studentName',
+        'studentEmail',
+        'deviceId',
+        'tokenUsed',
+        'tokenSequence',
+        'checkedInAt'
+      ]) &&
+      data.keys().hasOnly([
+        'sessionId',
+        'trainerName',
+        'classLab',
+        'sessionTitle',
+        'courseId',
+        'courseName',
+        'cuCode',
+        'batch',
+        'sessionDate',
+        'instructorUid',
+        'studentUid',
+        'studentName',
+        'studentEmail',
+        'deviceId',
+        'tokenUsed',
+        'tokenSequence',
+        'checkedInAt'
+      ]) &&
+      isValidId(data.sessionId) &&
+      data.trainerName is string && data.trainerName.size() >= 1 && data.trainerName.size() <= 100 &&
+      data.classLab is string && data.classLab.size() >= 1 && data.classLab.size() <= 64 &&
+      data.sessionTitle is string && data.sessionTitle.size() >= 2 && data.sessionTitle.size() <= 120 &&
+      (!('courseId' in data) || isValidCourseId(data.courseId)) &&
+      (!('courseName' in data) || (data.courseName is string && data.courseName.size() >= 2 && data.courseName.size() <= 120)) &&
+      (!('cuCode' in data) || isValidCuCode(data.cuCode)) &&
+      (!('batch' in data) || (data.batch is string && data.batch.size() <= 64)) &&
+      (!('sessionDate' in data) || (data.sessionDate is string && data.sessionDate.size() == 10 && data.sessionDate.matches('^\\d{4}-\\d{2}-\\d{2}$'))) &&
+      isValidId(data.instructorUid) &&
+      isValidId(data.studentUid) &&
+      data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
+      data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 160 &&
+      isValidDeviceId(data.deviceId) &&
+      isValidToken(data.tokenUsed) &&
+      data.tokenSequence is number && data.tokenSequence >= 1 && data.tokenSequence <= 1000000 &&
+      data.checkedInAt is timestamp;
+    }
+
+    function isValidDeviceLock(data) {
+      return data.keys().hasAll([
+        'sessionId',
+        'deviceId',
+        'studentUid',
+        'studentName',
+        'lockedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'sessionId',
+        'deviceId',
+        'studentUid',
+        'studentName',
+        'lockedAt'
+      ]) &&
+      isValidId(data.sessionId) &&
+      isValidDeviceId(data.deviceId) &&
+      isValidId(data.studentUid) &&
+      data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
+      data.lockedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Admins Registry (Read own marker only; no client self-promotion)
+    // -------------------------------------------------------------------------
+    match /admins/{uid} {
+      allow get: if isEmailVerified() && isValidId(uid) && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Course CU Setup Configs (4 deterministic non-PII curriculum docs)
+    // -------------------------------------------------------------------------
+    match /courseCuConfigs/{courseId} {
+      allow get: if isEmailVerified() && isValidCourseId(courseId);
+      allow list: if false;
+
+      allow create: if isAdmin() &&
+        isValidCourseCuConfig(incoming(), courseId) &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isAdmin() &&
+        isValidCourseCuConfig(incoming(), courseId) &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'courseName',
+          'unitList',
+          'units',
+          'updatedByUid',
+          'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Sessions (Instructor-managed; students can only read single scanned doc)
+    // -------------------------------------------------------------------------
+    match /sessions/{sessionId} {
+      allow get: if isEmailVerified() && isValidId(sessionId);
+      allow list: if isAdmin();
+
+      allow create: if isAdmin() &&
+        isValidId(sessionId) &&
+        isValidSession(incoming()) &&
+        incoming().instructorUid == request.auth.uid &&
+        incoming().tokenSequence == 1 &&
+        isSessionNotEnded(incoming()) &&
+        !('endedAt' in incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        existsAfter(/databases/$(database)/documents/sessions/$(sessionId)/private/qrState);
+
+      allow update: if isEmailVerified() &&
+        isValidId(sessionId) &&
+        isValidSession(incoming()) &&
+        incoming().instructorUid == existing().instructorUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isSessionNotEnded(existing()) &&
+        (
+          (
+            isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'trainerName',
+              'classLab',
+              'title',
+              'courseId',
+              'courseName',
+              'cuCode',
+              'batch',
+              'week',
+              'sessionDate',
+              'autoRotateSeconds',
+              'isOpen',
+              'tokenSequence',
+              'updatedAt'
+            ]) &&
+            incoming().tokenSequence >= existing().tokenSequence &&
+            incoming().tokenSequence <= existing().tokenSequence + 1
+          ) ||
+          (
+            isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'isOpen',
+              'isEnded',
+              'endedAt',
+              'updatedAt'
+            ]) &&
+            incoming().isOpen == false &&
+            incoming().isEnded == true &&
+            incoming().endedAt == request.time
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(sessionId);
+
+      // -----------------------------------------------------------------------
+      // Protected QR State (Readable and rotatable ONLY by instructor/admin)
+      // -----------------------------------------------------------------------
+      match /private/qrState {
+        allow get: if isAdmin() && isValidId(sessionId);
+        allow list: if false;
+
+        allow create: if isAdmin() &&
+          isValidId(sessionId) &&
+          isValidQrState(incoming()) &&
+          incoming().sessionId == sessionId &&
+          incoming().instructorUid == request.auth.uid &&
+          incoming().tokenSequence == 1 &&
+          incoming().updatedAt == request.time &&
+          !('previousToken' in incoming()) &&
+          !('lastConsumedToken' in incoming()) &&
+          !('lastConsumedByUid' in incoming()) &&
+          !('lastConsumedByName' in incoming()) &&
+          existsAfter(/databases/$(database)/documents/sessions/$(sessionId));
+
+        allow update: if isAdmin() &&
+          isValidId(sessionId) &&
+          isValidQrState(incoming()) &&
+          incoming().sessionId == existing().sessionId &&
+          incoming().instructorUid == existing().instructorUid &&
+          incoming().activeToken != existing().activeToken &&
+          incoming().updatedAt == request.time &&
+          isSessionNotEnded(get(/databases/$(database)/documents/sessions/$(sessionId)).data) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'activeToken',
+            'previousToken',
+            'tokenSequence',
+            'updatedAt'
+          ]) &&
+          incoming().previousToken == existing().activeToken &&
+          incoming().tokenSequence == existing().tokenSequence + 1;
+
+        allow delete: if isAdmin() && isValidId(sessionId);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Device Locks (One check-in per phone/browser per session; no PII)
+    // -------------------------------------------------------------------------
+    match /deviceLocks/{lockId} {
+      allow get: if isEmailVerified() && isValidId(lockId);
+      allow list: if isAdmin();
+
+      allow create: if isEmailVerified() &&
+        isValidId(lockId) &&
+        isValidDeviceLock(incoming()) &&
+        lockId == (incoming().sessionId + '_' + incoming().deviceId) &&
+        incoming().studentUid == request.auth.uid &&
+        incoming().lockedAt == request.time &&
+        exists(/databases/$(database)/documents/sessions/$(incoming().sessionId)) &&
+        get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.isOpen == true &&
+        isSessionNotEnded(get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data) &&
+        existsAfter(/databases/$(database)/documents/attendance/$(incoming().sessionId + '_' + request.auth.uid)) &&
+        getAfter(/databases/$(database)/documents/attendance/$(incoming().sessionId + '_' + request.auth.uid)).data.deviceId == incoming().deviceId;
+
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(lockId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Attendance Records (Immutable student check-ins)
+    // -------------------------------------------------------------------------
+    match /attendance/{recordId} {
+      allow get: if isEmailVerified() && isValidId(recordId) && (
+        existing().studentUid == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow list: if isEmailVerified() && (
+        existing().studentUid == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow create: if isEmailVerified() &&
+        isValidId(recordId) &&
+        isValidAttendance(incoming()) &&
+        recordId == (incoming().sessionId + '_' + request.auth.uid) &&
+        incoming().studentUid == request.auth.uid &&
+        incoming().studentEmail == request.auth.token.email &&
+        incoming().checkedInAt == request.time &&
+        exists(/databases/$(database)/documents/sessions/$(incoming().sessionId)) &&
+        get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.isOpen == true &&
+        isSessionNotEnded(get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data) &&
+        get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.instructorUid == incoming().instructorUid &&
+        get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.trainerName == incoming().trainerName &&
+        get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.classLab == incoming().classLab &&
+        get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.title == incoming().sessionTitle &&
+        (!('courseId' in get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data) || ('courseId' in incoming() && incoming().courseId == get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.courseId)) &&
+        (!('cuCode' in get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data) || ('cuCode' in incoming() && incoming().cuCode == get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.cuCode)) &&
+        (!('batch' in get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data) || ('batch' in incoming() && incoming().batch == get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.batch)) &&
+        (!('sessionDate' in get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data) || ('sessionDate' in incoming() && incoming().sessionDate == get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.sessionDate)) &&
+        incoming().tokenSequence <= get(/databases/$(database)/documents/sessions/$(incoming().sessionId)).data.tokenSequence &&
+        (
+          get(/databases/$(database)/documents/sessions/$(incoming().sessionId)/private/qrState).data.activeToken == incoming().tokenUsed ||
+          (
+            'previousToken' in get(/databases/$(database)/documents/sessions/$(incoming().sessionId)/private/qrState).data &&
+            get(/databases/$(database)/documents/sessions/$(incoming().sessionId)/private/qrState).data.previousToken == incoming().tokenUsed
+          )
+        ) &&
+        existsAfter(/databases/$(database)/documents/deviceLocks/$(incoming().sessionId + '_' + incoming().deviceId)) &&
+        getAfter(/databases/$(database)/documents/deviceLocks/$(incoming().sessionId + '_' + incoming().deviceId)).data.studentUid == request.auth.uid;
+
+      allow update: if false;
+
+      allow delete: if isAdmin() && isValidId(recordId);
+    }
+  }
+}

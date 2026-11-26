@@ -1,0 +1,384 @@
+{
+  "entities": {
+    "CourseCuConfig": {
+      "title": "CourseCuConfig",
+      "description": "Instructor-configurable course curriculum units/modules (names, duration weeks, and target class days excluding holidays) per major course.",
+      "type": "object",
+      "properties": {
+        "courseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "courseName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "unitList": {
+          "type": "array",
+          "description": "Ordered bounded list (1-50) of non-holiday curriculum units containing cuCode, unitName, levelLabel, category, totalHours, weeks, and targetDays."
+        },
+        "updatedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["courseId", "courseName", "unitList", "updatedByUid", "updatedAt"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "Public metadata and scan sequence counter for a classroom attendance session.",
+      "type": "object",
+      "properties": {
+        "trainerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "classLab": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "title": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "courseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "courseName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "cuCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[A-Z0-9][A-Z0-9_\\-]{1,31}$"
+        },
+        "batch": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64
+        },
+        "week": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 40
+        },
+        "sessionDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "autoRotateSeconds": {
+          "type": "number"
+        },
+        "instructorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "isOpen": {
+          "type": "boolean"
+        },
+        "isEnded": {
+          "type": "boolean"
+        },
+        "tokenSequence": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "endedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "trainerName",
+        "classLab",
+        "title",
+        "instructorUid",
+        "isOpen",
+        "tokenSequence",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SessionQrState": {
+      "title": "SessionQrState",
+      "description": "Protected active QR token state readable only by an instructor/admin.",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "instructorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "activeToken": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "previousToken": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "lastConsumedToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "lastConsumedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "lastConsumedByName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "tokenSequence": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "sessionId",
+        "instructorUid",
+        "activeToken",
+        "tokenSequence",
+        "updatedAt"
+      ]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Immutable student clock-in record capturing Google identity, academic course/CU/batch, device lock ID, and consumed QR token.",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "trainerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "classLab": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "sessionTitle": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "courseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "courseName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "cuCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[A-Z0-9][A-Z0-9_\\-]{1,31}$"
+        },
+        "batch": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64
+        },
+        "sessionDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "instructorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "studentEmail": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "deviceId": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tokenUsed": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tokenSequence": {
+          "type": "number"
+        },
+        "checkedInAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "sessionId",
+        "trainerName",
+        "classLab",
+        "sessionTitle",
+        "instructorUid",
+        "studentUid",
+        "studentName",
+        "studentEmail",
+        "deviceId",
+        "tokenUsed",
+        "tokenSequence",
+        "checkedInAt"
+      ]
+    },
+    "DeviceLock": {
+      "title": "DeviceLock",
+      "description": "Single-check-in-per-device lock keyed by {sessionId}_{deviceId}.",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deviceId": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "lockedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "sessionId",
+        "deviceId",
+        "studentUid",
+        "studentName",
+        "lockedAt"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted instructor/administrator marker document.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "maxLength": 160
+        }
+      },
+      "required": ["email"]
+    }
+  },
+  "firestore": {
+    "/courseCuConfigs/{courseId}": {
+      "schema": { "$ref": "#/entities/CourseCuConfig" },
+      "description": "Deterministic per-course curriculum units, duration weeks, and target class days configuration."
+    },
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/Session" },
+      "description": "Classroom session metadata and scan counter."
+    },
+    "/sessions/{sessionId}/private/qrState": {
+      "schema": { "$ref": "#/entities/SessionQrState" },
+      "description": "Protected active QR token state for the session."
+    },
+    "/attendance/{recordId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Immutable student clock-in records keyed by {sessionId}_{studentUid}."
+    },
+    "/deviceLocks/{lockId}": {
+      "schema": { "$ref": "#/entities/DeviceLock" },
+      "description": "One-check-in-per-device enforcement lock keyed by {sessionId}_{deviceId}."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Trusted instructor/admin registry."
+    }
+  }
+}
